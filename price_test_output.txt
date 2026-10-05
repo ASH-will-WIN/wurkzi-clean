@@ -1,0 +1,139 @@
+
+=== WORKZZY PRICE ENFORCEMENT TEST ===
+1. Registering users...
+
+2. Creating job with price $100...
+
+3. Application flow...
+
+
+id            : cmj4z9tfe0
+                002atiouf8
+                j56ex
+jobId         : cmj4z9sly0
+                000atiooki
+                3mek7
+workerId      : d1b2e063-1
+                2bf-46fe-9
+                675-286b13
+                6fd703
+message       : Apply
+status        : APPLIED
+depositId     : pi_3Se8ehK
+                gJ9j8dlrY1
+                YOlGlqO
+depositStatus : AUTHORIZED
+createdAt     : 2025-12-14
+                T00:19:43.
+                802Z
+updatedAt     : 2025-12-14
+                T00:19:45.
+                589Z
+
+id            : cmj4z9tfe0
+                002atiouf8
+                j56ex
+jobId         : cmj4z9sly0
+                000atiooki
+                3mek7
+workerId      : d1b2e063-1
+                2bf-46fe-9
+                675-286b13
+                6fd703
+message       : Apply
+status        : ACCEPTED
+depositId     : pi_3Se8ehK
+                gJ9j8dlrY1
+                YOlGlqO
+depositStatus : CAPTURED
+createdAt     : 2025-12-14
+                T00:19:43.
+                802Z
+updatedAt     : 2025-12-14
+                T00:19:47.
+                004Z
+
+
+4. Completing job...
+id                 : cmj4z
+                     9sly0
+                     000at
+                     iooki
+                     3mek7
+title              : Price
+                      
+                     Test 
+                     Job
+address            : 123 
+                     St
+initialDescription : Desc
+fullDescription    : Full 
+                     Desc
+status             : IN_PR
+                     OGRES
+                     S
+price              : 100
+hirerId            : bb450
+                     aa3-e
+                     b84-4
+                     812-b
+                     739-6
+                     29197
+                     a582c
+                     b
+createdAt          : 2025-
+                     12-14
+                     T00:1
+                     9:42.
+                     742Z
+updatedAt          : 2025-
+                     12-14
+                     T00:1
+                     9:47.
+                     698Z
+
+id                 : cmj4z
+                     9sly0
+                     000at
+                     iooki
+                     3mek7
+title              : Price
+                      
+                     Test 
+                     Job
+address            : 123 
+                     St
+initialDescription : Desc
+fullDescription    : Full 
+                     Desc
+status             : COMPL
+                     ETED
+price              : 100
+hirerId            : bb450
+                     aa3-e
+                     b84-4
+                     812-b
+                     739-6
+                     29197
+                     a582c
+                     b
+createdAt          : 2025-
+                     12-14
+                     T00:1
+                     9:42.
+                     742Z
+updatedAt          : 2025-
+                     12-14
+                     T00:1
+                     9:48.
+                     407Z
+
+
+5. Attempting to pay $50 (Should fail or be overridden to $100)...
+
+6. Verifying Payment Amount...
+Requested Amount: $50
+Actual Processed Amount: $100
+SUCCESS: System enforced job price of $100!
+
+

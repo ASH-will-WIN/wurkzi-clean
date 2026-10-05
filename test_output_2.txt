@@ -1,0 +1,46 @@
+
+=== WORKZZY CASH PAYMENT TEST ===
+Test Timestamp: 134101427883188900
+
+1. Registering users...
+
+2. Creating job...
+
+3. Worker applying...
+
+3.5 Confirming deposit...
+
+4. Hirer accepting...
+
+6. Worker starting...
+
+7. Worker completing...
+
+8. Marking as Paid in Cash (Worker)...
+Cash API Response: {
+    "message":  "Job marked as paid in cash",
+    "payment":  {
+                    "id":  "cmj4xun0i000aqtuocrlzk4m9",
+                    "amount":  100,
+                    "platformFee":  0,
+                    "workerAmount":  100,
+                    "depositRefund":  null,
+                    "status":  "PAID",
+                    "hirerId":  "b3851a9e-7d16-4fc3-afab-e30a80a30206",
+                    "workerId":  "439847fe-8563-4430-b9f6-60e91d95141f",
+                    "jobId":  "cmj4xui3h0006qtuo320i4nnd",
+                    "stripePaymentId":  "CASH_PAYMENT_1765669196034",
+                    "createdAt":  "2025-12-13T23:39:56.035Z",
+                    "updatedAt":  "2025-12-13T23:39:56.035Z"
+                }
+}
+
+9. Verifying final state...
+SUCCESS: Job Status is COMPLETED
+Found Cash Payment Record: Yes
+Amount: 100
+Worker Amount: 100
+Platform Fee: 0
+SUCCESS: Payment split is correct (100% to worker, 0 fee)
+
+=== CASH TEST COMPLETE ===

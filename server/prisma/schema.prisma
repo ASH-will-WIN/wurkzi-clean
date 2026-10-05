@@ -1,0 +1,322 @@
+generator client {
+  provider = "prisma-client-js"
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Job {
+  id                String        @id @default(cuid())
+  title             String
+  address           String
+  initialDescription String       @map("initial_description")
+  fullDescription    String       @map("full_description")
+  status            JobStatus     @default(PENDING)
+  
+  generalLocation   String?       @map("general_location")
+  city              String?
+  state             String?
+
+  price              Int
+  estimatedTime      Int?          @map("estimated_time") // In minutes
+  providesResources  Boolean       @default(true) @map("provides_resources")
+  requiredResources  String?       @map("required_resources")
+
+  hirerId           String        @map("hirer_id")
+  createdAt         DateTime      @default(now()) @map("createdAt")
+  updatedAt         DateTime      @updatedAt @map("updatedAt")
+  payments          Payment[]
+  jobImages         JobImage[]
+  applications      JobApplication[]
+  conversations     Conversation[]
+  reviews           Review[]
+  @@map("jobs")
+}
+model Payment {
+  id            String         @id @default(cuid())
+  amount        Float          // Total amount charged to hirer
+  platformFee   Float          // 10% fee kept by platform (required)
+  workerAmount  Float          // 90% sent to worker (required)
+  depositRefund Float?         // $5 deposit refund amount
+  status        PaymentStatus  @default(PENDING)
+  hirerId       String         @map("hirer_id")   // Supabase user ID
+  workerId      String         @map("worker_id")  // Supabase user ID
+  jobId         String         @map("job_id")
+  job           Job            @relation(fields: [jobId], references: [id])
+  stripePaymentId  String?        @map("stripe_payment_id")
+  referralCreditAppliedCents Int  @default(0) @map("referral_credit_applied_cents")
+  referralDiscountCents Int       @default(0) @map("referral_discount_cents")
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  @@map("payments")
+}
+
+model StripeAccount {
+  id                String   @id @default(cuid())
+  userId            String   @unique @map("user_id")
+  accountId         String   @unique @map("account_id")
+  chargesEnabled    Boolean  @default(false) @map("charges_enabled")
+  payoutsEnabled    Boolean  @default(false) @map("payouts_enabled")
+  detailsSubmitted  Boolean  @default(false) @map("details_submitted")
+  requiresAction    Boolean  @default(false) @map("requires_action")
+  currentDeadline   DateTime? @map("current_deadline")
+  lastSyncAt        DateTime? @map("last_sync_at")
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  @@map("stripe_accounts")
+}
+
+model JobApplication {
+  id            String         @id @default(cuid())
+  jobId         String
+  job           Job            @relation(fields: [jobId], references: [id])
+  workerId      String         @map("worker_id")  // This is the Supabase user ID
+  message       String?
+  status        ApplicationStatus @default(APPLIED)
+  depositId     String?        @map("deposit_id")
+  depositStatus DepositStatus  @default(AUTHORIZED)
+  depositCreditAppliedCents Int @default(0) @map("deposit_credit_applied_cents")
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  @@map("job_applications")
+}
+
+model JobImage {
+  id        String   @id @default(cuid())
+  jobId     String
+  job       Job      @relation(fields: [jobId], references: [id])
+  url       String
+  isPublic  Boolean  @default(false)  // Controls visibility before deposit
+  caption   String?
+  createdAt DateTime @default(now())
+  @@map("job_images")
+}
+
+model Conversation {
+  id               String    @id @default(cuid())
+  conversationKey  String    @unique @map("conversation_key")
+  participantOneId String    @map("participant_one_id")
+  participantTwoId String    @map("participant_two_id")
+  jobId            String?   @map("job_id")
+  job              Job?      @relation(fields: [jobId], references: [id])
+  lastMessageAt    DateTime  @default(now()) @map("last_message_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+  messages         Message[]
+
+  @@index([participantOneId, lastMessageAt])
+  @@index([participantTwoId, lastMessageAt])
+  @@index([jobId])
+  @@map("conversations")
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  content        String
+  imagePath      String?      @map("image_path")
+  senderId       String       @map("sender_id")
+  conversationId String       @map("conversation_id")
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  isRead         Boolean      @default(false) @map("is_read")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+
+  @@index([conversationId, createdAt, id])
+  @@map("messages")
+}
+
+model UserBlock {
+  id        String   @id @default(cuid())
+  blockerId String   @map("blocker_id")
+  blockedId String   @map("blocked_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([blockerId, blockedId])
+  @@index([blockedId])
+  @@map("user_blocks")
+}
+
+model UserProfile {
+  id                   String   @id @default(cuid())
+  userId               String   @unique @map("user_id")
+  phone                String?
+  displayName          String?  @map("display_name")
+  city                 String?
+  bio                  String?  @db.VarChar(500)
+  avatarPath           String?  @map("avatar_path")
+  referralCode         String   @unique @map("referral_code")
+  referredById         String?  @map("referred_by_id")
+  platformCreditCents  Int      @default(0) @map("platform_credit_cents")
+  postingDiscountCount Int      @default(0) @map("posting_discount_count")
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  @@map("user_profiles")
+}
+
+model LeaderboardSeason {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  startsAt  DateTime @map("starts_at")
+  endsAt    DateTime @map("ends_at")
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  participants LeaderboardParticipant[]
+  pointEvents  LeaderboardPointEvent[]
+
+  @@index([isActive, startsAt, endsAt])
+  @@map("leaderboard_seasons")
+}
+
+model LeaderboardParticipant {
+  id                       String                        @id @default(cuid())
+  seasonId                 String                        @map("season_id")
+  userId                   String                        @map("user_id")
+  audience                 LeaderboardAudience
+  nickname                 String
+  schoolName               String?                       @map("school_name")
+  schoolEmail              String?                       @map("school_email")
+  verificationStatus       LeaderboardVerificationStatus @default(VERIFIED) @map("verification_status")
+  verifiedAt               DateTime?                     @map("verified_at")
+  points                   Int                           @default(0)
+  qualifyingJobCount       Int                           @default(0) @map("qualifying_job_count")
+  successfulReferralCount  Int                           @default(0) @map("successful_referral_count")
+  lastPointAt              DateTime?                     @map("last_point_at")
+  createdAt                DateTime                      @default(now()) @map("created_at")
+  updatedAt                DateTime                      @updatedAt @map("updated_at")
+
+  season      LeaderboardSeason       @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  pointEvents LeaderboardPointEvent[]
+
+  @@unique([seasonId, userId])
+  @@index([seasonId, audience, points])
+  @@map("leaderboard_participants")
+}
+
+model LeaderboardPointEvent {
+  id            String                 @id @default(cuid())
+  seasonId      String                 @map("season_id")
+  participantId String                 @map("participant_id")
+  action        LeaderboardPointAction
+  points        Int
+  sourceId      String                 @map("source_id")
+  occurredAt    DateTime               @default(now()) @map("occurred_at")
+  createdAt     DateTime               @default(now()) @map("created_at")
+
+  season      LeaderboardSeason      @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  participant LeaderboardParticipant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+
+  @@unique([seasonId, action, sourceId])
+  @@index([participantId, occurredAt])
+  @@map("leaderboard_point_events")
+}
+
+model Referral {
+  id                      String    @id @default(cuid())
+  referrerId              String    @map("referrer_id")
+  referredId              String    @unique @map("referred_id")
+  workerRewardGrantedAt   DateTime? @map("worker_reward_granted_at")
+  neighborRewardGrantedAt DateTime? @map("neighbor_reward_granted_at")
+  createdAt               DateTime  @default(now()) @map("created_at")
+
+  @@index([referrerId])
+  @@map("referrals")
+}
+
+model ReferralReward {
+  id          String             @id @default(cuid())
+  referralId  String             @map("referral_id")
+  recipientId String             @map("recipient_id")
+  jobId       String             @map("job_id")
+  type        ReferralRewardType
+  amountCents Int                @default(0) @map("amount_cents")
+  createdAt   DateTime           @default(now()) @map("created_at")
+
+  @@unique([referralId, recipientId, type])
+  @@index([recipientId])
+  @@map("referral_rewards")
+}
+
+enum DepositStatus {
+  PENDING
+  AUTHORIZED
+  CAPTURED
+  REFUNDED
+}
+
+enum JobStatus {
+  PENDING
+  COMMITTED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum ApplicationStatus {
+  APPLIED
+  ACCEPTED
+  REJECTED
+  WITHDRAWN
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+}
+
+model Report {
+  id          String    @id @default(cuid())
+  reporterId  String    @map("reporter_id")
+  reportedId  String?   @map("reported_id")
+  jobId       String?   @map("job_id")
+  reason      String
+  status      String    @default("PENDING")
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@map("reports")
+}
+
+enum ReferralRewardType {
+  WORKER_CREDIT
+  NEIGHBOR_POSTING_DISCOUNT
+}
+
+enum LeaderboardAudience {
+  STUDENT
+  NEIGHBOR
+}
+
+enum LeaderboardVerificationStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum LeaderboardPointAction {
+  SUCCESSFUL_REFERRAL
+  STUDENT_JOB_COMPLETED
+  NEIGHBOR_JOB_COMPLETED
+}
+
+model Review {
+  id         String   @id @default(cuid())
+  jobId      String   @map("job_id")
+  job        Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  reviewerId String   @map("reviewer_id")
+  revieweeId String   @map("reviewee_id")
+  rating     Int
+  comment    String?
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  @@unique([jobId, reviewerId])
+  @@index([revieweeId])
+  @@map("reviews")
+}

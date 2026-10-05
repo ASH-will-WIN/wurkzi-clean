@@ -1,0 +1,72 @@
+[
+    {
+        "id":  "cmj4yfiyz000hqtuob4706g15",
+        "amount":  10,
+        "platformFee":  0,
+        "workerAmount":  10,
+        "depositRefund":  0,
+        "status":  "PAID",
+        "hirerId":  "543f91f1-ed71-44b5-919a-78e719be324f",
+        "workerId":  "20c4b406-e868-4a6b-8c86-f8ea0308248e",
+        "jobId":  "cmj4ye4uz000bqtuohtybl84y",
+        "stripePaymentId":  "CASH_PAYMENT_1765670170570",
+        "createdAt":  "2025-12-13T23:56:10.571Z",
+        "updatedAt":  "2025-12-13T23:56:10.571Z"
+    },
+    {
+        "id":  "cmj4yffkw000fqtuo4hfswu4q",
+        "amount":  10,
+        "platformFee":  0,
+        "workerAmount":  10,
+        "depositRefund":  0,
+        "status":  "PAID",
+        "hirerId":  "543f91f1-ed71-44b5-919a-78e719be324f",
+        "workerId":  "20c4b406-e868-4a6b-8c86-f8ea0308248e",
+        "jobId":  "cmj4ye4uz000bqtuohtybl84y",
+        "stripePaymentId":  "CASH_PAYMENT_1765670166175",
+        "createdAt":  "2025-12-13T23:56:06.177Z",
+        "updatedAt":  "2025-12-13T23:56:06.177Z"
+    },
+    {
+        "id":  "cmj4xun0i000aqtuocrlzk4m9",
+        "amount":  100,
+        "platformFee":  0,
+        "workerAmount":  100,
+        "depositRefund":  0,
+        "status":  "PAID",
+        "hirerId":  "b3851a9e-7d16-4fc3-afab-e30a80a30206",
+        "workerId":  "439847fe-8563-4430-b9f6-60e91d95141f",
+        "jobId":  "cmj4xui3h0006qtuo320i4nnd",
+        "stripePaymentId":  "CASH_PAYMENT_1765669196034",
+        "createdAt":  "2025-12-13T23:39:56.035Z",
+        "updatedAt":  "2025-12-13T23:39:56.035Z"
+    },
+    {
+        "id":  "cmj4xa4zz0007103r4m9uc6l9",
+        "amount":  10,
+        "platformFee":  0,
+        "workerAmount":  10,
+        "depositRefund":  0,
+        "status":  "PAID",
+        "hirerId":  "543f91f1-ed71-44b5-919a-78e719be324f",
+        "workerId":  "20c4b406-e868-4a6b-8c86-f8ea0308248e",
+        "jobId":  "cmj4x6h6c0001103ry24mo358",
+        "stripePaymentId":  "pi_3Se7mlKgJ9j8dlrY1VvvgZ1s",
+        "createdAt":  "2025-12-13T23:23:59.567Z",
+        "updatedAt":  "2025-12-13T23:24:11.757Z"
+    },
+    {
+        "id":  "cmj4x91jq0005103r4anut9b3",
+        "amount":  10,
+        "platformFee":  0,
+        "workerAmount":  10,
+        "depositRefund":  0,
+        "status":  "PAID",
+        "hirerId":  "543f91f1-ed71-44b5-919a-78e719be324f",
+        "workerId":  "20c4b406-e868-4a6b-8c86-f8ea0308248e",
+        "jobId":  "cmj4x6h6c0001103ry24mo358",
+        "stripePaymentId":  "pi_3Se7lwKgJ9j8dlrY1SXI78N3",
+        "createdAt":  "2025-12-13T23:23:08.438Z",
+        "updatedAt":  "2025-12-13T23:23:22.416Z"
+    }
+]

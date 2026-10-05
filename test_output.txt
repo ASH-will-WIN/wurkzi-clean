@@ -1,0 +1,14 @@
+
+=== WORKZZY CASH PAYMENT TEST ===
+Test Timestamp: 134101426957934767
+
+1. Registering users...
+
+2. Creating job...
+
+3. Worker applying...
+
+3.5 Confirming deposit...
+
+ERROR: The remote server returned an error: (404) Not Found.
+Response: 

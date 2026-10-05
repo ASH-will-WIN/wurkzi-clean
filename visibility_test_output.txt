@@ -1,0 +1,36 @@
+1. Registering users...
+
+2. Creating job...
+
+3. Worker checks job BEFORE applying...
+Confirmed: Address restricted before apply
+
+4. Worker Applies...
+
+
+id            : cmj4zzal5000
+                4uqj2k2o1es6
+                2
+jobId         : cmj4zz8y5000
+                0uqj2d73c2m6
+                7
+workerId      : 306a73ba-45e
+                e-415f-aff1-
+                5ea77a175ee5
+message       : Apply
+status        : APPLIED
+depositId     : pi_3Se8xsKgJ
+                9j8dlrY0rgKC
+                ZQq
+depositStatus : AUTHORIZED
+createdAt     : 2025-12-14T0
+                0:39:32.441Z
+updatedAt     : 2025-12-14T0
+                0:39:34.258Z
+
+
+5. Worker checks job AFTER applying...
+SUCCESS: Address visible after application!
+SUCCESS: 1 images visible!
+
+
