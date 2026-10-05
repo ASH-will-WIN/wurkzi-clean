@@ -6,6 +6,7 @@ import {
   getApplicationsForJob,
   acceptApplication,
   rejectApplication,
+  confirmApplicationDeposit,
 } from "../api/applicationApi";
 import { useAuth } from "../context/AuthContext";
 import { useNavigate } from "react-router-dom";
@@ -33,6 +34,7 @@ const JobDetail = () => {
   // --- NEW STATE FOR PAYMENT ---
   const [showPaymentForm, setShowPaymentForm] = useState(false);
   const [clientSecret, setClientSecret] = useState(null);
+  const [pendingApplicationId, setPendingApplicationId] = useState(null);
   const [startingChat, setStartingChat] = useState(false);
   const [chatError, setChatError] = useState("");
   const [reviews, setReviews] = useState([]);
@@ -156,6 +158,7 @@ const JobDetail = () => {
       // Step 1: Create the application on your backend
       const applicationData = await createApplication({ jobId: id, message });
       if (applicationData.clientSecret) {
+        setPendingApplicationId(applicationData.application.id);
         setClientSecret(applicationData.clientSecret);
         setShowPaymentForm(true);
       } else {
@@ -171,10 +174,18 @@ const JobDetail = () => {
       );
     }
   };
-  const onPaymentSuccess = () => {
-    alert("Application submitted successfully! Check your dashboard for next steps.");
-    setShowPaymentForm(false);
-    setMessage("");
+  const onPaymentSuccess = async () => {
+    try {
+      await confirmApplicationDeposit(pendingApplicationId);
+      alert("Application submitted successfully! Check your dashboard for next steps.");
+      setShowPaymentForm(false);
+      setPendingApplicationId(null);
+      setClientSecret(null);
+      setMessage("");
+      fetchJobAndApps();
+    } catch (error) {
+      setChatError(error.response?.data?.message || "We couldn't confirm the deposit yet. Please refresh your application status.");
+    }
   };
   const onPaymentError = (errorMsg) => {
     alert(`Payment failed: ${errorMsg}`);

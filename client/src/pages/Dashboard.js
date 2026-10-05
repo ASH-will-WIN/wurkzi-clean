@@ -282,7 +282,8 @@ const Dashboard = () => {
   }
 
   // Show Stripe Connect onboarding banner if needed (non-blocking)
-  const showOnboardingBanner = needsStripeSetup && stripeStatus && !stripeStatus.detailsSubmitted;
+  const showOnboardingBanner = needsStripeSetup && stripeStatus
+    && !(stripeStatus.detailsSubmitted && stripeStatus.chargesEnabled && stripeStatus.payoutsEnabled);
 
   const ViewSwitcher = () => (
     <div className="flex justify-center mb-8">
@@ -1565,6 +1566,10 @@ const StripeOnboardingCard = ({ stripeStatus }) => {
 
     if (stripeStatus.requiresAction) {
       return "Your Stripe account requires additional information. Please complete the setup.";
+    }
+
+    if (!stripeStatus.payoutsEnabled) {
+      return "Stripe is still reviewing your payout details. You can use Wurkzi while payout access is being confirmed.";
     }
 
     return "Setting up your payment account...";

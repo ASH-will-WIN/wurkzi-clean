@@ -1,5 +1,7 @@
 const { prisma, stripeClient } = require("../db");
 const { syncAccountStatus } = require("./connectController");
+const applicationController = require("./applicationController");
+const paymentController = require("./paymentController");
 
 // Handle Stripe webhook events
 async function handleStripeWebhook(req, res) {
@@ -33,6 +35,20 @@ async function handleStripeWebhook(req, res) {
       case 'capability.updated':
         await handleCapabilityUpdated(event.data.object);
         break;
+      case 'payment_intent.amount_capturable_updated':
+        await applicationController.authorizeDepositFromIntent(event.data.object, req.app.get("io"));
+        break;
+      case 'payment_intent.succeeded': {
+        const payment = await prisma.payment.findUnique({ where: { stripePaymentId: event.data.object.id } });
+        if (payment) await paymentController.markPaymentPaid(payment.id, req.app.get("io"));
+        break;
+      }
+      case 'payment_intent.payment_failed':
+      case 'payment_intent.canceled': {
+        const payment = await prisma.payment.findUnique({ where: { stripePaymentId: event.data.object.id } });
+        if (payment) await paymentController.markPaymentFailedAndRestoreCredits(payment.id);
+        break;
+      }
       default:
         console.log(`Unhandled event type: ${event.type}`);
     }

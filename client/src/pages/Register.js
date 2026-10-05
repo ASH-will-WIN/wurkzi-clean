@@ -10,6 +10,7 @@ const Register = () => {
   const [role] = useState("MEMBER"); // Default role (hidden from user)
   const [error, setError] = useState("");
   const [agreedToTerms, setAgreedToTerms] = useState(false);
+  const [smsNotificationsEnabled, setSmsNotificationsEnabled] = useState(false);
   const location = useLocation();
   const [referralCode] = useState(() => new URLSearchParams(location.search).get("ref") || "");
   const { register } = useAuth();
@@ -39,8 +40,12 @@ const Register = () => {
     }
 
     try {
-      await register(name, email, password, role, phone, referralCode);
-      navigate("/dashboard");
+      const result = await register(name, email, password, role, phone, referralCode, smsNotificationsEnabled);
+      if (result?.requiresEmailVerification) {
+        navigate("/verify-email", { state: { email: result.email || email, sent: true } });
+      } else {
+        navigate("/dashboard");
+      }
     } catch (err) {
       // Display server error message if available
       if (err.response && err.response.data && err.response.data.error) {
@@ -154,6 +159,19 @@ const Register = () => {
                 </Link>
               </label>
             </div>
+          </div>
+
+          <div className="flex items-start text-left">
+            <input
+              id="sms-opt-in"
+              type="checkbox"
+              checked={smsNotificationsEnabled}
+              onChange={(e) => setSmsNotificationsEnabled(e.target.checked)}
+              className="mt-1 h-4 w-4 rounded border-slate-600 bg-slate-900 text-wurkzi-600 focus:ring-wurkzi-500 focus:ring-offset-slate-900"
+            />
+            <label htmlFor="sms-opt-in" className="ml-3 text-sm text-slate-400">
+              Text me important job updates and new messages. Message frequency varies; message and data rates may apply. Reply STOP to opt out.
+            </label>
           </div>
 
           <button

@@ -1,6 +1,7 @@
 const { createClient } = require("@supabase/supabase-js");
 const { randomBytes } = require("crypto");
 const { prisma } = require("../db");
+const { createNotification } = require("../services/notificationService");
 
 const MESSAGE_IMAGE_BUCKET = "message-images";
 const IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
@@ -73,11 +74,24 @@ async function assertNotBlocked(userId, otherUserId) {
   }
 }
 
-async function assertJobAuthorization(jobId, participantOneId, participantTwoId) {
+function isApplicationChatEligible(application) {
+  return Boolean(application && (
+    application.status === "ACCEPTED"
+    || (application.status === "APPLIED" && ["AUTHORIZED", "CAPTURED"].includes(application.depositStatus))
+  ));
+}
+
+/**
+ * All job-conversation access flows through this check. The only valid pair is
+ * the job's hirer and the worker who applied to that exact job.
+ * REJECTED/WITHDRAWN applications may read an existing conversation, but may
+ * not create one or send further messages.
+ */
+async function assertJobAuthorization(jobId, participantOneId, participantTwoId, action = "read") {
   if (!jobId) return null;
   const job = await prisma.job.findUnique({
     where: { id: jobId },
-    include: { applications: { select: { workerId: true, status: true } } },
+    include: { applications: { select: { workerId: true, status: true, depositStatus: true } } },
   });
   if (!job) {
     const error = new Error("Job not found");
@@ -85,24 +99,27 @@ async function assertJobAuthorization(jobId, participantOneId, participantTwoId)
     throw error;
   }
 
-  const isAuthorized = (userId) => {
-    if (job.hirerId === userId) return true;
-    const application = job.applications.find((item) => item.workerId === userId);
-    return Boolean(application && application.status !== "WITHDRAWN");
-  };
+  const hirerIsParticipant = participantOneId === job.hirerId || participantTwoId === job.hirerId;
+  const workerId = participantOneId === job.hirerId ? participantTwoId : participantOneId;
+  const application = hirerIsParticipant
+    ? job.applications.find((item) => item.workerId === workerId)
+    : null;
+  const activeApplication = isApplicationChatEligible(application);
+  const mayMessage = Boolean(application && (
+    application.status === "ACCEPTED"
+    || (application.status === "APPLIED" && job.status === "PENDING" && ["AUTHORIZED", "CAPTURED"].includes(application.depositStatus))
+  ) && job.status !== "CANCELLED");
+  const historicalApplication = application && ["REJECTED", "WITHDRAWN"].includes(application.status);
+  const allowed = action === "create" || action === "send"
+    ? mayMessage
+    : activeApplication || historicalApplication;
 
-  if (job.status === "PENDING") {
-    if (job.hirerId !== participantOneId && job.hirerId !== participantTwoId) {
-      const error = new Error("You can only message the hirer about this job");
-      error.status = 403;
-      throw error;
-    }
-  } else if (!isAuthorized(participantOneId) || !isAuthorized(participantTwoId)) {
+  if (!hirerIsParticipant || !application || !allowed) {
     const error = new Error("Not authorized to message about this job");
     error.status = 403;
     throw error;
   }
-  return job;
+  return { ...job, application, messagingAllowed: mayMessage };
 }
 
 function getOtherParticipant(conversation, userId) {
@@ -111,7 +128,7 @@ function getOtherParticipant(conversation, userId) {
     : conversation.participantOneId;
 }
 
-async function getConversationForMember(conversationId, userId) {
+async function getConversationForMember(conversationId, userId, action = "read") {
   const conversation = await prisma.conversation.findUnique({
     where: { id: conversationId },
     include: { job: { select: { id: true, title: true, status: true } } },
@@ -123,7 +140,41 @@ async function getConversationForMember(conversationId, userId) {
   }
   const otherUserId = getOtherParticipant(conversation, userId);
   await assertNotBlocked(userId, otherUserId);
-  return { conversation, otherUserId };
+  let jobAccess = null;
+  if (conversation.jobId) {
+    jobAccess = await assertJobAuthorization(
+      conversation.jobId,
+      conversation.participantOneId,
+      conversation.participantTwoId,
+      action,
+    );
+  }
+  return {
+    conversation,
+    otherUserId,
+    messagingAllowed: jobAccess?.messagingAllowed ?? true,
+    applicationStatus: jobAccess?.application?.status || null,
+  };
+}
+
+async function getConversationAccess(conversation) {
+  if (!conversation.jobId) return { canRead: true, messagingAllowed: true, applicationStatus: null };
+  try {
+    const access = await assertJobAuthorization(
+      conversation.jobId,
+      conversation.participantOneId,
+      conversation.participantTwoId,
+      "read",
+    );
+    return {
+      canRead: true,
+      messagingAllowed: access.messagingAllowed,
+      applicationStatus: access.application?.status || null,
+    };
+  } catch (error) {
+    if (error.status === 403 || error.status === 404) return { canRead: false, messagingAllowed: false, applicationStatus: null };
+    throw error;
+  }
 }
 
 async function participantSummaries(userIds) {
@@ -175,7 +226,7 @@ async function createConversation(req, res) {
       throw error;
     }
     await assertNotBlocked(req.user.id, participantId);
-    await assertJobAuthorization(jobId, participantOneId, participantTwoId);
+    await assertJobAuthorization(jobId, participantOneId, participantTwoId, "create");
 
     const key = conversationKey(participantOneId, participantTwoId, jobId);
     const conversation = await prisma.conversation.upsert({
@@ -194,7 +245,7 @@ async function createConversation(req, res) {
 async function getConversations(req, res) {
   try {
     const blockedIds = await getBlockedIds(req.user.id);
-    const conversations = (await prisma.conversation.findMany({
+    const allConversations = await prisma.conversation.findMany({
       where: { OR: [{ participantOneId: req.user.id }, { participantTwoId: req.user.id }] },
       orderBy: [{ lastMessageAt: "desc" }, { id: "desc" }],
       take: 100,
@@ -203,15 +254,24 @@ async function getConversations(req, res) {
         messages: { orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 1 },
         _count: { select: { messages: { where: { senderId: { not: req.user.id }, isRead: false } } } },
       },
-    })).filter((conversation) => !blockedIds.has(getOtherParticipant(conversation, req.user.id)));
+    });
+    const eligible = await Promise.all(allConversations.map(async (conversation) => ({
+      conversation,
+      access: await getConversationAccess(conversation),
+    })));
+    const conversations = eligible
+      .filter(({ conversation, access }) => access.canRead && !blockedIds.has(getOtherParticipant(conversation, req.user.id)))
+      .map(({ conversation, access }) => ({ conversation, access }));
 
-    const people = await participantSummaries(conversations.map((conversation) => getOtherParticipant(conversation, req.user.id)));
-    const serialized = await Promise.all(conversations.map(async (conversation) => {
+    const people = await participantSummaries(conversations.map(({ conversation }) => getOtherParticipant(conversation, req.user.id)));
+    const serialized = await Promise.all(conversations.map(async ({ conversation, access }) => {
       const latest = conversation.messages[0];
       return {
         id: conversation.id,
         participant: people.get(getOtherParticipant(conversation, req.user.id)),
         job: conversation.job,
+        messagingAllowed: access.messagingAllowed,
+        applicationStatus: access.applicationStatus,
         lastMessageAt: conversation.lastMessageAt,
         unreadCount: conversation._count.messages,
         latestMessage: latest ? {
@@ -231,7 +291,7 @@ async function getConversations(req, res) {
 
 async function getConversationMessages(req, res) {
   try {
-    const { conversation } = await getConversationForMember(req.params.conversationId, req.user.id);
+    const { conversation, messagingAllowed, applicationStatus } = await getConversationForMember(req.params.conversationId, req.user.id);
     const cursor = typeof req.query.cursor === "string" ? req.query.cursor : undefined;
     const rows = await prisma.message.findMany({
       where: { conversationId: conversation.id },
@@ -242,7 +302,7 @@ async function getConversationMessages(req, res) {
     const hasMore = rows.length > PAGE_SIZE;
     const page = rows.slice(0, PAGE_SIZE);
     const messages = await Promise.all(page.reverse().map(serializeMessage));
-    res.json({ conversation, messages, nextCursor: hasMore ? page[page.length - 1]?.id : null });
+    res.json({ conversation, messages, messagingAllowed, applicationStatus, nextCursor: hasMore ? page[page.length - 1]?.id : null });
   } catch (error) {
     console.error("Get conversation messages error:", error.message);
     res.status(error.status || 500).json({ error: "message_list_failed", message: error.message });
@@ -264,8 +324,7 @@ async function sendMessage(req, res) {
       return res.status(400).json({ error: "message_required", message: "Write a message or attach a photo." });
     }
 
-    const { conversation, otherUserId } = await getConversationForMember(req.params.conversationId, req.user.id);
-    await assertJobAuthorization(conversation.jobId, conversation.participantOneId, conversation.participantTwoId);
+    const { conversation, otherUserId } = await getConversationForMember(req.params.conversationId, req.user.id, "send");
 
     if (image) {
       const extension = image.contentType.split("/")[1] === "jpeg" ? "jpg" : image.contentType.split("/")[1];
@@ -286,7 +345,23 @@ async function sendMessage(req, res) {
       return created;
     });
     const serialized = await serializeMessage(message);
-    req.app.get("io")?.to(req.user.id).to(otherUserId).emit("message:new", { conversationId: conversation.id, message: serialized });
+    const io = req.app.get("io");
+    io?.to(req.user.id).to(otherUserId).emit("message:new", { conversationId: conversation.id, message: serialized });
+    try {
+      const preview = content || "Sent a photo";
+      await createNotification({
+        recipientId: otherUserId,
+        sourceKey: `message:${message.id}:recipient:${otherUserId}`,
+        type: "NEW_MESSAGE",
+        title: "New message",
+        body: preview.slice(0, 240),
+        href: `/messages?conversationId=${encodeURIComponent(conversation.id)}`,
+        smsText: "Wurkzi: You have a new message. Sign in to Wurkzi to read and reply.",
+      }, io);
+    } catch (notificationError) {
+      // Notification delivery is best-effort and must not turn a sent message into an error.
+      console.error("Message notification error:", notificationError.message);
+    }
     res.status(201).json({ message: serialized });
   } catch (error) {
     if (uploadedPath) {
@@ -316,10 +391,17 @@ async function markConversationAsRead(req, res) {
 async function getUnreadCount(req, res) {
   try {
     const blockedIds = await getBlockedIds(req.user.id);
-    const conversations = (await prisma.conversation.findMany({
+    const allConversations = await prisma.conversation.findMany({
       where: { OR: [{ participantOneId: req.user.id }, { participantTwoId: req.user.id }] },
       select: { id: true, participantOneId: true, participantTwoId: true },
-    })).filter((conversation) => !blockedIds.has(getOtherParticipant(conversation, req.user.id)));
+    });
+    const eligible = await Promise.all(allConversations.map(async (conversation) => ({
+      conversation,
+      access: await getConversationAccess(conversation),
+    })));
+    const conversations = eligible
+      .filter(({ conversation, access }) => access.canRead && !blockedIds.has(getOtherParticipant(conversation, req.user.id)))
+      .map(({ conversation }) => conversation);
     const count = await prisma.message.count({
       where: { conversationId: { in: conversations.map((conversation) => conversation.id) }, senderId: { not: req.user.id }, isRead: false },
     });

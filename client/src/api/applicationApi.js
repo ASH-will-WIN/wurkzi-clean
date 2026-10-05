@@ -5,6 +5,11 @@ export const createApplication = async (appData) => {
   return response.data; // This now returns { application, clientSecret }
 };
 
+export const confirmApplicationDeposit = async (applicationId) => {
+  const response = await apiClient.post(`/applications/${applicationId}/confirm-deposit`);
+  return response.data;
+};
+
 export const getMyApplications = async () => {
   const response = await apiClient.get("/applications");
   return response.data;
@@ -29,4 +34,3 @@ export const withdrawApplication = async (appId) => {
   const response = await apiClient.patch(`/applications/${appId}/withdraw`);
   return response.data;
 };
-

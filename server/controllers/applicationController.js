@@ -6,8 +6,85 @@ const {
   supabase,
   stripeClient,
 } = require("../db");
+const { createNotification } = require("../services/notificationService");
+
+async function notifyApplication(application, status, io) {
+  const hirerId = application.job?.hirerId;
+  const jobTitle = application.job?.title || "your job";
+  if (status === "SUBMITTED" && hirerId) {
+    try { await createNotification({
+      recipientId: hirerId,
+      sourceKey: `application:${application.id}:submitted`,
+      type: "NEW_APPLICATION",
+      title: "New job application",
+      body: `A worker applied for ${jobTitle}.`,
+      smsText: `A worker applied for ${jobTitle}.`,
+      href: `/jobs/${application.jobId}`,
+    }, io); } catch (error) { console.error("Application notification failed:", error.message); }
+    return;
+  }
+  const accepted = status === "ACCEPTED";
+  try { await createNotification({
+    recipientId: application.workerId,
+    sourceKey: `application:${application.id}:${status.toLowerCase()}`,
+    type: accepted ? "APPLICATION_ACCEPTED" : "APPLICATION_REJECTED",
+    title: accepted ? "Application accepted" : "Application update",
+    body: accepted ? `Your application for ${jobTitle} was accepted.` : `Your application for ${jobTitle} was rejected.`,
+    smsText: accepted ? `Your application for ${jobTitle} was accepted.` : `Your application for ${jobTitle} was rejected.`,
+    href: `/jobs/${application.jobId}`,
+  }, io); } catch (error) { console.error("Application notification failed:", error.message); }
+}
+
+function emitApplicationStatus(io, application, status) {
+  if (!io) return;
+  io.to(application.workerId).to(application.job?.hirerId).emit("application:status", {
+    jobId: application.jobId,
+    applicationId: application.id,
+    workerId: application.workerId,
+    status,
+  });
+}
+
+async function releaseApplicationDeposit(application) {
+  if (!application.depositId) return;
+  const intent = await stripeClient.paymentIntents.retrieve(application.depositId);
+  if (intent.status === "canceled") return;
+  if (intent.status === "succeeded") {
+    await stripeClient.refunds.create({ payment_intent: intent.id }, {
+      idempotencyKey: `wurkzi-release-application-deposit-${application.id}`,
+    });
+    return;
+  }
+  if (["requires_capture", "requires_payment_method", "requires_confirmation", "requires_action"].includes(intent.status)) {
+    await stripeClient.paymentIntents.cancel(intent.id);
+    return;
+  }
+  const error = new Error("The application deposit is still processing. Try again once Stripe finishes.");
+  error.status = 409;
+  throw error;
+}
+
+async function authorizeDepositFromIntent(paymentIntent, io = null) {
+  if (!paymentIntent?.id || paymentIntent.status !== "requires_capture") return null;
+  const applicationId = paymentIntent.metadata?.applicationId;
+  if (!applicationId) return null;
+  const application = await prisma.jobApplication.findUnique({
+    where: { id: applicationId },
+    include: { job: { select: { hirerId: true, title: true } } },
+  });
+  if (!application || application.depositId !== paymentIntent.id || application.status !== ApplicationStatus.APPLIED) return null;
+  const updated = await prisma.jobApplication.updateMany({
+    where: { id: application.id, depositStatus: DepositStatus.PENDING, status: ApplicationStatus.APPLIED },
+    data: { depositStatus: DepositStatus.AUTHORIZED },
+  });
+  if (updated.count) await notifyApplication(application, "SUBMITTED", io);
+  return prisma.jobApplication.findUnique({ where: { id: application.id } });
+}
 
 async function createApplication(req, res) {
+  let reservedCreditWorkerId = null;
+  let pendingPaymentIntentId = null;
+  let createdApplicationId = null;
   try {
     const { jobId, message } = req.body;
 
@@ -51,28 +128,32 @@ async function createApplication(req, res) {
     }
 
     if (existingApplication) {
-      if (existingApplication.status === ApplicationStatus.WITHDRAWN) {
-        // If they withdrew before, delete the old record so they can re-apply fresh
-        await prisma.jobApplication.delete({
-          where: { id: existingApplication.id },
-        });
-      } else {
-        return res.status(400).json({
-          error: "duplicate_application",
-          message: "You have already applied for this job",
-        });
-      }
+      return res.status(400).json({
+        error: "duplicate_application",
+        message: existingApplication.status === ApplicationStatus.WITHDRAWN
+          ? "You withdrew this application. Its conversation history is still available read-only."
+          : "You have already applied for this job",
+      });
     }
 
 
     const profile = await prisma.userProfile.findUnique({ where: { userId: workerId } });
-    const depositCreditAppliedCents = profile?.platformCreditCents >= 500 ? 500 : 0;
+    let depositCreditAppliedCents = profile?.platformCreditCents >= 500 ? 500 : 0;
+    if (depositCreditAppliedCents) {
+      const reserved = await prisma.userProfile.updateMany({
+        where: { userId: workerId, platformCreditCents: { gte: 500 } },
+        data: { platformCreditCents: { decrement: 500 } },
+      });
+      if (!reserved.count) depositCreditAppliedCents = 0;
+      else reservedCreditWorkerId = workerId;
+    }
     const depositIntent = depositCreditAppliedCents ? null : await stripeClient.paymentIntents.create({
       amount: 500,
       currency: "usd",
       capture_method: "manual",
       metadata: { jobId, applicationId: "temp", type: "DEPOSIT" },
     });
+    pendingPaymentIntentId = depositIntent?.id || null;
 
     // Create application record
     const application = await prisma.jobApplication.create({
@@ -81,16 +162,19 @@ async function createApplication(req, res) {
         workerId,
         message,
         depositId: depositIntent?.id || null,
-        depositStatus: DepositStatus.AUTHORIZED,
+        depositStatus: depositCreditAppliedCents ? DepositStatus.AUTHORIZED : DepositStatus.PENDING,
         depositCreditAppliedCents,
         status: ApplicationStatus.APPLIED,
       },
     });
+    createdApplicationId = application.id;
+    reservedCreditWorkerId = null;
 
-    if (depositCreditAppliedCents) {
-      await prisma.userProfile.update({ where: { userId: workerId }, data: { platformCreditCents: { decrement: depositCreditAppliedCents } } });
+    if (!depositCreditAppliedCents) {
+      await stripeClient.paymentIntents.update(depositIntent.id, { metadata: { applicationId: application.id, jobId, type: "DEPOSIT" } });
     } else {
-      await stripeClient.paymentIntents.update(depositIntent.id, { metadata: { applicationId: application.id } });
+      const applicationWithJob = await prisma.jobApplication.findUnique({ where: { id: application.id }, include: { job: { select: { title: true, hirerId: true } } } });
+      await notifyApplication(applicationWithJob, "SUBMITTED", req.app.get("io"));
     }
 
     res.status(201).json({
@@ -99,12 +183,45 @@ async function createApplication(req, res) {
       usedReferralCredit: Boolean(depositCreditAppliedCents),
     });
   } catch (error) {
+    if (createdApplicationId) {
+      try { await prisma.jobApplication.delete({ where: { id: createdApplicationId } }); } catch (cleanupError) { console.error("Application cleanup error:", cleanupError.message); }
+    }
+    if (pendingPaymentIntentId) {
+      try { await stripeClient.paymentIntents.cancel(pendingPaymentIntentId); } catch (cleanupError) { console.error("Deposit cleanup error:", cleanupError.message); }
+    }
+    if (reservedCreditWorkerId) {
+      try { await prisma.userProfile.update({ where: { userId: reservedCreditWorkerId }, data: { platformCreditCents: { increment: 500 } } }); } catch (cleanupError) { console.error("Application credit restore error:", cleanupError.message); }
+    }
     console.error("Application Creation Error:", error.message);
     res.status(500).json({
       error: "application_creation_failed",
       message: "Failed to create job application",
       details: error.message,
     });
+  }
+}
+
+async function confirmApplicationDeposit(req, res) {
+  try {
+    const application = await prisma.jobApplication.findUnique({
+      where: { id: req.params.id },
+      include: { job: { select: { hirerId: true, title: true } } },
+    });
+    if (!application) return res.status(404).json({ error: "application_not_found" });
+    if (application.workerId !== req.user.id) return res.status(403).json({ error: "not_application_owner" });
+    if (application.depositCreditAppliedCents) return res.json({ application, authorized: true });
+    if (!application.depositId) return res.status(400).json({ error: "deposit_not_found" });
+
+    const intent = await stripeClient.paymentIntents.retrieve(application.depositId);
+    if (intent.metadata?.applicationId !== application.id || intent.status !== "requires_capture") {
+      return res.status(409).json({ error: "deposit_not_authorized", message: "The $5 deposit has not been authorized yet." });
+    }
+    const updated = await authorizeDepositFromIntent(intent, req.app.get("io"));
+    if (!updated) return res.status(409).json({ error: "application_not_eligible" });
+    res.json({ application: updated, authorized: true });
+  } catch (error) {
+    console.error("Confirm application deposit error:", error.message);
+    res.status(500).json({ error: "deposit_confirmation_failed", message: "Could not confirm the application deposit." });
   }
 }
 
@@ -192,11 +309,19 @@ async function acceptApplication(req, res) {
       return res.status(404).json({ error: "Application not found" });
     }
 
+    if (application.job.hirerId !== req.user.id) {
+      return res.status(403).json({ error: "not_job_owner", message: "Only the hirer can accept this application." });
+    }
+
     if (application.status !== ApplicationStatus.APPLIED) {
       return res.status(400).json({
         error: "invalid_status",
         message: "Application is not in a state that can be accepted",
       });
+    }
+
+    if (![DepositStatus.AUTHORIZED, DepositStatus.CAPTURED].includes(application.depositStatus)) {
+      return res.status(409).json({ error: "deposit_not_authorized", message: "The worker must confirm the $5 deposit before acceptance." });
     }
 
     // Check if the job already has an accepted application
@@ -214,9 +339,18 @@ async function acceptApplication(req, res) {
       });
     }
 
+    const otherApplicants = await prisma.jobApplication.findMany({
+      where: { jobId: application.jobId, id: { not: id }, status: ApplicationStatus.APPLIED },
+      select: { workerId: true },
+    });
+
     // Capture the $5 deposit
     try {
-      if (application.depositId) await stripeClient.paymentIntents.capture(application.depositId);
+      if (application.depositId && application.depositStatus !== DepositStatus.CAPTURED) {
+        const intent = await stripeClient.paymentIntents.retrieve(application.depositId);
+        if (intent.status === "requires_capture") await stripeClient.paymentIntents.capture(application.depositId);
+        else if (intent.status !== "succeeded") throw new Error("The worker's deposit is not ready to capture.");
+      }
     } catch (stripeError) {
       console.error("Stripe Capture Error:", stripeError.message);
       return res.status(500).json({
@@ -242,6 +376,11 @@ async function acceptApplication(req, res) {
       }),
     ]);
 
+    emitApplicationStatus(req.app.get("io"), { ...updatedApplication, job: application.job }, "ACCEPTED");
+    for (const applicant of otherApplicants) {
+      req.app.get("io")?.to(applicant.workerId).emit("job:status", { jobId: application.jobId, status: JobStatus.COMMITTED });
+    }
+    await notifyApplication({ ...updatedApplication, job: application.job }, "ACCEPTED", req.app.get("io"));
     res.json(updatedApplication);
 
   } catch (error) {
@@ -261,10 +400,15 @@ async function rejectApplication(req, res) {
     // Get the application
     const application = await prisma.jobApplication.findUnique({
       where: { id },
+      include: { job: { select: { hirerId: true, title: true } } },
     });
 
     if (!application) {
       return res.status(404).json({ error: "Application not found" });
+    }
+
+    if (application.job.hirerId !== req.user.id) {
+      return res.status(403).json({ error: "not_job_owner", message: "Only the hirer can reject this application." });
     }
 
     if (application.status !== ApplicationStatus.APPLIED) {
@@ -274,25 +418,32 @@ async function rejectApplication(req, res) {
       });
     }
 
-    // Cancel the deposit (refund the $5)
-    if (application.depositId) await stripeClient.paymentIntents.cancel(application.depositId);
-    if (application.depositCreditAppliedCents) {
-      await prisma.userProfile.update({ where: { userId: application.workerId }, data: { platformCreditCents: { increment: application.depositCreditAppliedCents } } });
-    }
+    await releaseApplicationDeposit(application);
 
     // Update application status
-    const updatedApplication = await prisma.jobApplication.update({
-      where: { id },
-      data: {
-        status: ApplicationStatus.REJECTED,
-        depositStatus: DepositStatus.REFUNDED,
-      },
+    const updatedApplication = await prisma.$transaction(async (tx) => {
+      const claimed = await tx.jobApplication.updateMany({
+        where: { id, status: ApplicationStatus.APPLIED },
+        data: { status: ApplicationStatus.REJECTED, depositStatus: DepositStatus.REFUNDED },
+      });
+      if (!claimed.count) {
+        const error = new Error("This application has already changed.");
+        error.status = 409;
+        throw error;
+      }
+      const updated = await tx.jobApplication.findUnique({ where: { id } });
+      if (application.depositCreditAppliedCents) {
+        await tx.userProfile.update({ where: { userId: application.workerId }, data: { platformCreditCents: { increment: application.depositCreditAppliedCents } } });
+      }
+      return updated;
     });
+    await notifyApplication({ ...updatedApplication, job: application.job }, "REJECTED", req.app.get("io"));
+    emitApplicationStatus(req.app.get("io"), { ...updatedApplication, job: application.job }, "REJECTED");
 
     res.json(updatedApplication);
   } catch (error) {
     console.error("Reject Application Error:", error.message);
-    res.status(500).json({
+    res.status(error.status || 500).json({
       error: "application_reject_failed",
       message: "Failed to reject application",
       details: error.message,
@@ -310,6 +461,7 @@ async function withdrawApplication(req, res) {
     // Get the application and verify it belongs to the worker and is in APPLIED status
     const application = await prisma.jobApplication.findUnique({
       where: { id },
+      include: { job: { select: { hirerId: true } } },
     });
 
     if (!application) {
@@ -330,32 +482,31 @@ async function withdrawApplication(req, res) {
       });
     }
 
-    // Cancel the deposit (refund the $5)
-    try {
-      if (application.depositId) await stripeClient.paymentIntents.cancel(application.depositId);
-    } catch (stripeError) {
-      // If payment intent is already cancelled or captured, handle it
-      console.error("Stripe Cancellation Error:", stripeError.message);
-      // We still want to update the DB if it was already cancelled or refund it if possible
-    }
-
-    if (application.depositCreditAppliedCents) {
-      await prisma.userProfile.update({ where: { userId: workerId }, data: { platformCreditCents: { increment: application.depositCreditAppliedCents } } });
-    }
+    await releaseApplicationDeposit(application);
 
     // Update application status
-    const updatedApplication = await prisma.jobApplication.update({
-      where: { id },
-      data: {
-        status: ApplicationStatus.WITHDRAWN,
-        depositStatus: DepositStatus.REFUNDED,
-      },
+    const updatedApplication = await prisma.$transaction(async (tx) => {
+      const claimed = await tx.jobApplication.updateMany({
+        where: { id, status: ApplicationStatus.APPLIED },
+        data: { status: ApplicationStatus.WITHDRAWN, depositStatus: DepositStatus.REFUNDED },
+      });
+      if (!claimed.count) {
+        const error = new Error("This application has already changed.");
+        error.status = 409;
+        throw error;
+      }
+      const updated = await tx.jobApplication.findUnique({ where: { id } });
+      if (application.depositCreditAppliedCents) {
+        await tx.userProfile.update({ where: { userId: workerId }, data: { platformCreditCents: { increment: application.depositCreditAppliedCents } } });
+      }
+      return updated;
     });
+    emitApplicationStatus(req.app.get("io"), { ...updatedApplication, job: application.job }, "WITHDRAWN");
 
     res.json(updatedApplication);
   } catch (error) {
     console.error("Withdraw Application Error:", error.message);
-    res.status(500).json({
+    res.status(error.status || 500).json({
       error: "application_withdrawal_failed",
       message: "Failed to withdraw application",
       details: error.message,
@@ -365,6 +516,8 @@ async function withdrawApplication(req, res) {
 
 module.exports = {
   createApplication,
+  confirmApplicationDeposit,
+  authorizeDepositFromIntent,
   getApplications,
   getJobApplications,
   acceptApplication,
@@ -372,4 +525,3 @@ module.exports = {
 
   withdrawApplication,
 };
-

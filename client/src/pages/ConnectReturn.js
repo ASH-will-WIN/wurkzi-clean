@@ -18,7 +18,7 @@ const ConnectReturn = () => {
           const statusData = refreshResult.status;
           setAccountStatus(statusData);
 
-          if (statusData.detailsSubmitted && statusData.chargesEnabled) {
+          if (statusData.detailsSubmitted && statusData.chargesEnabled && statusData.payoutsEnabled) {
             setStatus("success");
             setMessage("Great! Your account setup is complete. You can now receive payments.");
 
@@ -26,9 +26,9 @@ const ConnectReturn = () => {
             setTimeout(() => {
               navigate("/dashboard");
             }, 3000);
-          } else if (statusData.detailsSubmitted && !statusData.chargesEnabled) {
+          } else if (statusData.detailsSubmitted && (!statusData.chargesEnabled || !statusData.payoutsEnabled)) {
             setStatus("pending");
-            setMessage("Your information has been submitted and is being reviewed. You'll be notified when approved.");
+            setMessage("Your information has been submitted. Stripe is still reviewing your account before payouts are available.");
 
             // Redirect to dashboard after 3 seconds
             setTimeout(() => {

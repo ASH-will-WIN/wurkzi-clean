@@ -22,6 +22,7 @@ import Support from "./pages/Support"; // Added import for Support page
 import Footer from "./components/Footer"; // Added import for Footer
 import ForgotPassword from "./pages/ForgotPassword";
 import ResetPassword from "./pages/ResetPassword";
+import VerifyEmail from "./pages/VerifyEmail";
 import Referrals from "./pages/Referrals";
 import Leaderboard from "./pages/Leaderboard";
 import Staging from "./pages/Staging";
@@ -38,10 +39,10 @@ function App() {
   useEffect(() => {
     // Check for Supabase password reset token in the URL hash
     const hash = window.location.hash;
-    if (hash && hash.includes("access_token") && (hash.includes("type=recovery") || hash.includes("type=magiclink") || !hash.includes("type="))) {
-      console.log("Detected password reset token, redirecting to reset-password page");
-      // Redirect to reset password page, preserving the hash so the page can parse the token
+    if (hash && hash.includes("access_token") && hash.includes("type=recovery")) {
       navigate(`/reset-password${hash}`);
+    } else if (hash && hash.includes("access_token") && (hash.includes("type=signup") || hash.includes("type=email_change"))) {
+      navigate(`/verify-email${hash}`);
     }
   }, [navigate]);
 
@@ -60,6 +61,7 @@ function App() {
           <Route path="/register" element={<Register />} />
           <Route path="/forgot-password" element={<ForgotPassword />} />
           <Route path="/reset-password" element={<ResetPassword />} />
+          <Route path="/verify-email" element={<VerifyEmail />} />
           <Route path="/onboarding" element={<Onboarding />} />
           <Route path="/connect-return" element={<ConnectReturn />} />
           <Route path="/connect-refresh" element={<ConnectRefresh />} />

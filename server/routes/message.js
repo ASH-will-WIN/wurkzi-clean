@@ -3,7 +3,7 @@ const auth = require("../middleware/auth");
 const controller = require("../controllers/messageController");
 
 const router = express.Router();
-router.use(auth);
+router.use(auth, auth.requireVerifiedEmail);
 
 router.post("/conversations", controller.createConversation);
 router.get("/conversations", controller.getConversations);

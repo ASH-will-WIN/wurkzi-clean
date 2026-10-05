@@ -1,15 +1,61 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import logo from "../assets/logo.png";
 import UnreadMessagesBadge from "./UnreadMessagesBadge";
+import { connectMessageRealtime, disconnectMessageRealtime } from "../api/messageRealtime";
+import { getNotifications, getNotificationPreferences, markAllNotificationsRead, markNotificationRead, updateNotificationPreferences } from "../api/notificationApi";
 
 const Navbar = () => {
-  const { isAuthenticated, logout, user, profile } = useAuth();
+  const { isAuthenticated, logout, user, profile, token } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [notifications, setNotifications] = useState([]);
+  const [notificationUnreadCount, setNotificationUnreadCount] = useState(0);
+  const [smsEnabled, setSmsEnabled] = useState(false);
+  const [smsOptedOut, setSmsOptedOut] = useState(false);
+  const [smsSaving, setSmsSaving] = useState(false);
+  const [notificationError, setNotificationError] = useState("");
+
+  const refreshNotifications = useCallback(async () => {
+    try {
+      const data = await getNotifications();
+      setNotifications(data.notifications);
+      setNotificationUnreadCount(data.unreadCount);
+      setNotificationError("");
+    } catch (error) {
+      setNotificationError("Could not load notifications.");
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isAuthenticated || !token) return undefined;
+    let live = true;
+    Promise.all([getNotifications(), getNotificationPreferences()]).then(([data, preferences]) => {
+      if (!live) return;
+      setNotifications(data.notifications);
+      setNotificationUnreadCount(data.unreadCount);
+      setSmsEnabled(Boolean(preferences.smsNotificationsEnabled));
+      setSmsOptedOut(Boolean(preferences.smsOptedOut));
+    }).catch(() => { if (live) setNotificationError("Could not load notifications."); });
+    const socket = connectMessageRealtime(token);
+    const onNotification = (notification) => {
+      if (notification?.id) {
+        setNotifications((items) => [notification, ...items.filter((item) => item.id !== notification.id)].slice(0, 20));
+        if (!(notification.readAt || notification.isRead)) setNotificationUnreadCount((count) => count + 1);
+      }
+      refreshNotifications();
+    };
+    socket?.on("notification:new", onNotification);
+    return () => {
+      live = false;
+      socket?.off("notification:new", onNotification);
+      disconnectMessageRealtime();
+    };
+  }, [isAuthenticated, token, refreshNotifications]);
 
   // Handle scroll effect
   useEffect(() => {
@@ -47,6 +93,44 @@ const Navbar = () => {
 
   const getUserRole = () => {
     return user?.user_metadata?.role || "USER";
+  };
+
+  const openNotification = async (notification) => {
+    const wasUnread = !(notification.readAt || notification.isRead);
+    setNotifications((items) => items.map((item) => item.id === notification.id ? { ...item, isRead: true, readAt: item.readAt || new Date().toISOString() } : item));
+    if (wasUnread) setNotificationUnreadCount((count) => Math.max(0, count - 1));
+    try { await markNotificationRead(notification.id); } catch (error) { /* navigation should remain immediate */ }
+    setNotificationsOpen(false);
+    setIsMenuOpen(false);
+    navigate(notification.href || "/dashboard");
+  };
+
+  const handleMarkAllRead = async () => {
+    setNotifications((items) => items.map((item) => ({ ...item, isRead: true, readAt: item.readAt || new Date().toISOString() })));
+    setNotificationUnreadCount(0);
+    try { await markAllNotificationsRead(); } catch (error) { refreshNotifications(); }
+  };
+
+  const handleSmsChange = async (event) => {
+    const enabled = event.target.checked;
+    const previous = smsEnabled;
+    setSmsEnabled(enabled);
+    setSmsSaving(true);
+    try {
+      const preferences = await updateNotificationPreferences({ smsNotificationsEnabled: enabled });
+      setSmsEnabled(Boolean(preferences.smsNotificationsEnabled));
+    } catch (error) {
+      setSmsEnabled(previous);
+      setNotificationError(error.response?.data?.message || "Could not update SMS preference.");
+    } finally { setSmsSaving(false); }
+  };
+
+  const unreadNotification = (item) => !(item.readAt || item.isRead);
+  const notificationTitle = (item) => item.title || item.subject || "Wurkzi update";
+  const notificationBody = (item) => item.body || item.message || item.content || "You have a new update.";
+  const notificationDate = (item) => {
+    const date = new Date(item.createdAt || item.sentAt || "");
+    return Number.isNaN(date.getTime()) ? "" : new Intl.DateTimeFormat([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(date);
   };
 
   return (
@@ -147,6 +231,11 @@ const Navbar = () => {
                   </svg>
                 </Link>
 
+                <button type="button" onClick={() => setNotificationsOpen((open) => !open)} aria-expanded={notificationsOpen} aria-label={`Notifications${notificationUnreadCount ? `, ${notificationUnreadCount} unread` : ""}`} className="relative rounded-full p-2 text-slate-400 transition-colors hover:bg-slate-800 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-wurkzi-400">
+                  <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" /></svg>
+                  {notificationUnreadCount > 0 && <span className="absolute -right-0.5 -top-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white">{notificationUnreadCount > 9 ? "9+" : notificationUnreadCount}</span>}
+                </button>
+
                 <div className="relative group flex items-center gap-3">
                   <div className="hidden lg:flex flex-col items-end mr-1">
                     <span className="text-xs font-bold text-wurkzi-400 uppercase tracking-wider border border-wurkzi-500/30 bg-wurkzi-500/10 px-2 py-0.5 rounded">
@@ -212,7 +301,11 @@ const Navbar = () => {
           </div>
 
           {/* Mobile menu button */}
-          <div className="md:hidden flex items-center">
+          <div className="md:hidden flex items-center gap-2">
+            {isAuthenticated && <button type="button" onClick={() => setNotificationsOpen((open) => !open)} aria-expanded={notificationsOpen} aria-label={`Notifications${notificationUnreadCount ? `, ${notificationUnreadCount} unread` : ""}`} className="relative rounded-md p-2 text-slate-300 hover:bg-slate-800 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-wurkzi-400">
+              <svg className="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" /></svg>
+              {notificationUnreadCount > 0 && <span className="absolute right-0 top-0 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white">{notificationUnreadCount > 9 ? "9+" : notificationUnreadCount}</span>}
+            </button>}
             <button
               onClick={() => setIsMenuOpen(!isMenuOpen)}
               className="inline-flex items-center justify-center p-2 rounded-md text-slate-400 hover:text-white hover:bg-slate-800 focus:outline-none transition-colors"
@@ -231,6 +324,26 @@ const Navbar = () => {
           </div>
         </div>
       </div>
+
+      {isAuthenticated && notificationsOpen && <div className="absolute right-3 top-[4.5rem] z-[60] w-[min(24rem,calc(100vw-1.5rem))] overflow-hidden rounded-xl border border-slate-700 bg-slate-900 shadow-2xl" role="dialog" aria-label="Notifications">
+        <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
+          <div><h2 className="font-semibold text-white">Notifications</h2><p className="text-xs text-slate-400">{notificationUnreadCount ? `${notificationUnreadCount} unread` : "You're all caught up"}</p></div>
+          {notificationUnreadCount > 0 && <button type="button" onClick={handleMarkAllRead} className="text-xs font-medium text-wurkzi-300 hover:text-white">Mark all read</button>}
+        </div>
+        <div className="max-h-[min(55vh,24rem)] overflow-y-auto">
+          {notificationError && <p className="px-4 py-3 text-sm text-red-300" role="alert">{notificationError}</p>}
+          {notifications.length ? notifications.slice(0, 20).map((item) => <button type="button" key={item.id} onClick={() => openNotification(item)} className={`block w-full border-b border-slate-800 px-4 py-3 text-left transition hover:bg-slate-800 focus:outline-none focus-visible:bg-slate-800 ${unreadNotification(item) ? "bg-slate-800/50" : ""}`}>
+            <div className="flex items-start gap-3"><span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${unreadNotification(item) ? "bg-wurkzi-400" : "bg-transparent"}`} /><span className="min-w-0 flex-1"><span className="block text-sm font-medium text-white">{notificationTitle(item)}</span><span className="mt-0.5 block line-clamp-2 text-sm text-slate-300">{notificationBody(item)}</span><span className="mt-1 block text-xs text-slate-500">{notificationDate(item)}</span></span></div>
+          </button>) : !notificationError && <p className="px-4 py-8 text-center text-sm text-slate-400">No notifications yet.</p>}
+        </div>
+        <div className="flex items-center justify-between gap-3 border-t border-slate-800 px-4 py-3">
+          <div className="min-w-0">
+            <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-300"><input type="checkbox" checked={smsEnabled} disabled={smsSaving || smsOptedOut} onChange={handleSmsChange} className="h-4 w-4 rounded border-slate-600 bg-slate-800 text-wurkzi-500 focus:ring-wurkzi-400" />SMS alerts</label>
+            <p className="ml-6 mt-1 text-xs text-slate-500">{smsOptedOut ? "Reply START to a Wurkzi text to opt in again." : "Job updates and message alerts. Reply STOP to opt out; message and data rates may apply."}</p>
+          </div>
+          <span className="shrink-0 text-xs text-slate-500">{smsSaving ? "Saving…" : ""}</span>
+        </div>
+      </div>}
 
       {/* Mobile Menu */}
       {isMenuOpen && (

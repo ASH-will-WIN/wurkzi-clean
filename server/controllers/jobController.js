@@ -5,6 +5,7 @@ const {
   DepositStatus,
   supabase,
 } = require("../db");
+const { createNotification } = require("../services/notificationService");
 
 async function createJob(req, res) {
   try {
@@ -576,6 +577,21 @@ async function completeJob(req, res) {
       where: { id: jobId },
       data: { status: JobStatus.COMPLETED },
     });
+
+    const workerId = job.applications[0].workerId;
+    const body = `${job.title} was marked complete.`;
+    await Promise.all([job.hirerId, workerId].map((recipientId) =>
+      createNotification({
+        recipientId,
+        sourceKey: `job_completed:${jobId}:${recipientId}`,
+        type: "JOB_COMPLETED",
+        title: "Job completed",
+        body,
+        smsText: body,
+        href: `/jobs/${jobId}`,
+      }, req.app.get("io")).catch((error) => console.error("Job completion notification failed:", error.message))
+    ));
+    req.app.get("io")?.to(workerId).to(job.hirerId).emit("job:status", { jobId, status: "COMPLETED" });
 
     res.json(updatedJob);
   } catch (error) {

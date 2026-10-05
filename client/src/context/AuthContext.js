@@ -1,5 +1,5 @@
 import React, { createContext, useState, useEffect, useContext, useCallback } from "react";
-import { loginUser, registerUser } from "../api/authApi";
+import { loginUser, registerUser, resendEmailVerification, verifyEmailSession } from "../api/authApi";
 import { apiClient } from "../api/apiClient";
 import { getMyProfile } from "../api/profileApi";
 
@@ -48,15 +48,18 @@ export const AuthProvider = ({ children }) => {
     // Note: Onboarding status will be checked on Dashboard load
   };
 
-  const register = async (name, email, password, role, phone, referralCode) => {
-    const { user, session } = await registerUser({
+  const register = async (name, email, password, role, phone, referralCode, smsNotificationsEnabled = false) => {
+    const result = await registerUser({
       name,
       email,
       password,
       role,
       phone,
       referralCode,
+      ...(smsNotificationsEnabled ? { smsNotificationsEnabled: true } : {}),
     });
+    const { user, session } = result;
+    if (!session?.access_token) return { requiresEmailVerification: true, email: user?.email || email };
     localStorage.setItem("token", session.access_token);
     localStorage.setItem("user", JSON.stringify(user));
     setToken(session.access_token);
@@ -65,13 +68,29 @@ export const AuthProvider = ({ children }) => {
       "Authorization"
     ] = `Bearer ${session.access_token}`;
     await refreshProfile();
+    return { requiresEmailVerification: false, email: user?.email || email };
 
     // Note: Onboarding status will be checked on Dashboard load
   };
 
+  const resendVerification = async (email) => resendEmailVerification(email);
+
+  const completeEmailVerification = useCallback(async (accessToken, refreshToken) => {
+    const { user } = await verifyEmailSession(accessToken);
+    localStorage.setItem("token", accessToken);
+    if (refreshToken) localStorage.setItem("refreshToken", refreshToken);
+    localStorage.setItem("user", JSON.stringify(user));
+    setToken(accessToken);
+    setUser(user);
+    apiClient.defaults.headers.common.Authorization = `Bearer ${accessToken}`;
+    await refreshProfile();
+    return user;
+  }, [refreshProfile]);
+
   const logout = () => {
     localStorage.removeItem("token");
     localStorage.removeItem("user");
+    localStorage.removeItem("refreshToken");
     setToken(null);
     setUser(null);
     setProfile(null);
@@ -84,6 +103,8 @@ export const AuthProvider = ({ children }) => {
     token,
     login,
     register,
+    resendVerification,
+    completeEmailVerification,
     logout,
     refreshProfile,
     isAuthenticated: !!token,

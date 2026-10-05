@@ -4,12 +4,12 @@ const authMiddleware = require("../middleware/auth");
 const connectController = require("../controllers/connectController");
 
 // Create Connect account and get onboarding link
-router.post("/account", authMiddleware, connectController.createAccount);
+router.post("/account", authMiddleware, authMiddleware.requireVerifiedEmail, connectController.createAccount);
 
 // Get current user's Connect account status
-router.get("/status", authMiddleware, connectController.getStatus);
+router.get("/status", authMiddleware, authMiddleware.requireVerifiedEmail, connectController.getStatus);
 
 // Manually refresh account status from Stripe
-router.post("/refresh", authMiddleware, connectController.refreshStatus);
+router.post("/refresh", authMiddleware, authMiddleware.requireVerifiedEmail, connectController.refreshStatus);
 
 module.exports = router;

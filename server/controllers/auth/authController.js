@@ -10,7 +10,7 @@ async function generateReferralCode() {
 }
 // Register a new user
 const registerUser = async (req, res) => {
-  const { email, password, name, role, phone, referralCode } = req.body;
+  const { email, password, name, role, phone, referralCode, smsNotificationsEnabled } = req.body;
 
   // Validate required fields
   if (!phone) {
@@ -30,10 +30,13 @@ const registerUser = async (req, res) => {
       if (!referrerProfile) return res.status(400).json({ error: "That referral code is invalid." });
     }
 
+    const origin = req.get("origin");
+    const clientUrl = (process.env.CLIENT_URL || origin || "http://localhost:3000").replace(/\/$/, "");
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
       options: {
+        emailRedirectTo: `${clientUrl}/verify-email`,
         data: {
           name,
           role: role || "MEMBER", // Default to MEMBER if not specified
@@ -54,7 +57,14 @@ const registerUser = async (req, res) => {
       try {
         await prisma.$transaction(async (tx) => {
           await tx.userProfile.create({
-            data: { userId: data.user.id, phone, displayName: typeof name === "string" && name.trim() ? name.trim() : null, referralCode: await generateReferralCode(), referredById: referrerProfile?.userId || null },
+            data: {
+              userId: data.user.id,
+              phone,
+              displayName: typeof name === "string" && name.trim() ? name.trim() : null,
+              referralCode: await generateReferralCode(),
+              referredById: referrerProfile?.userId || null,
+              ...(smsNotificationsEnabled === true ? { smsNotificationsEnabled: true, smsConsentAt: new Date() } : {}),
+            },
           });
           if (referrerProfile) await tx.referral.create({ data: { referrerId: referrerProfile.userId, referredId: data.user.id } });
         });
@@ -88,12 +98,52 @@ const loginUser = async (req, res) => {
     });
 
     if (error) {
-      return res.status(500).json({ error: error.message });
+      const unverified = /email not confirmed|email_not_confirmed/i.test(error.message || "");
+      return res.status(unverified ? 403 : 401).json({
+        error: unverified ? "Please verify your email before signing in." : error.message,
+        code: unverified ? "EMAIL_NOT_VERIFIED" : undefined,
+      });
+    }
+
+    if (data.user && !data.user.email_confirmed_at && !data.user.confirmed_at) {
+      return res.status(403).json({ error: "Please verify your email before signing in.", code: "EMAIL_NOT_VERIFIED" });
     }
 
     res.status(200).json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+};
+
+const resendEmailVerification = async (req, res) => {
+  const email = typeof req.body.email === "string" ? req.body.email.trim() : "";
+  if (!email) return res.status(400).json({ error: "Email is required" });
+  const origin = req.get("origin");
+  const clientUrl = (process.env.CLIENT_URL || origin || "http://localhost:3000").replace(/\/$/, "");
+  try {
+    const { error } = await supabase.auth.resend({
+      type: "signup",
+      email,
+      options: { emailRedirectTo: `${clientUrl}/verify-email` },
+    });
+    if (error) return res.status(400).json({ error: error.message });
+    return res.status(200).json({ message: "If an account needs verification, a confirmation email has been sent." });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+};
+
+const verifyEmailSession = async (req, res) => {
+  const accessToken = req.body.access_token;
+  if (!accessToken) return res.status(400).json({ error: "Email confirmation token is missing" });
+  try {
+    const { data, error } = await supabase.auth.getUser(accessToken);
+    if (error || !data?.user) return res.status(401).json({ error: "This confirmation link is invalid or expired." });
+    const emailConfirmedAt = data.user.email_confirmed_at || data.user.confirmed_at || null;
+    if (!emailConfirmedAt) return res.status(403).json({ error: "Email confirmation has not completed yet.", code: "EMAIL_NOT_VERIFIED" });
+    return res.status(200).json({ user: data.user, email_confirmed_at: emailConfirmedAt });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
   }
 };
 
@@ -231,6 +281,8 @@ const deleteAccount = async (req, res) => {
 module.exports = {
   registerUser,
   loginUser,
+  resendEmailVerification,
+  verifyEmailSession,
   forgotPassword,
   resetPassword,
   deleteAccount

@@ -14,7 +14,7 @@ const ConnectRefresh = () => {
         // Get fresh account status and onboarding link
         const statusData = await connectApi.getStripeAccount();
 
-        if (statusData.detailsSubmitted && statusData.chargesEnabled) {
+        if (statusData.detailsSubmitted && statusData.chargesEnabled && statusData.payoutsEnabled) {
           // Already complete, go to dashboard
           setStatus("complete");
           setMessage("Your account setup is already complete!");

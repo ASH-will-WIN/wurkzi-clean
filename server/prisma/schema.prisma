@@ -29,6 +29,7 @@ model Job {
   createdAt         DateTime      @default(now()) @map("createdAt")
   updatedAt         DateTime      @updatedAt @map("updatedAt")
   payments          Payment[]
+  incentive         JobIncentive?
   jobImages         JobImage[]
   applications      JobApplication[]
   conversations     Conversation[]
@@ -46,9 +47,11 @@ model Payment {
   workerId      String         @map("worker_id")  // Supabase user ID
   jobId         String         @map("job_id")
   job           Job            @relation(fields: [jobId], references: [id])
-  stripePaymentId  String?        @map("stripe_payment_id")
+  stripePaymentId  String?        @unique @map("stripe_payment_id")
   referralCreditAppliedCents Int  @default(0) @map("referral_credit_applied_cents")
   referralDiscountCents Int       @default(0) @map("referral_discount_cents")
+  creditsRestoredAt DateTime? @map("credits_restored_at")
+  paidAt        DateTime?      @map("paid_at")
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
   @@map("payments")
@@ -151,9 +154,70 @@ model UserProfile {
   referredById         String?  @map("referred_by_id")
   platformCreditCents  Int      @default(0) @map("platform_credit_cents")
   postingDiscountCount Int      @default(0) @map("posting_discount_count")
+  smsNotificationsEnabled Boolean @default(false) @map("sms_notifications_enabled")
+  smsConsentAt        DateTime? @map("sms_consent_at")
+  smsOptedOutAt       DateTime? @map("sms_opted_out_at")
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
+  notifications        Notification[]
   @@map("user_profiles")
+}
+
+model JobIncentive {
+  id                    String   @id @default(cuid())
+  jobId                 String   @unique @map("job_id")
+  workerId              String   @map("worker_id")
+  hirerId               String   @map("hirer_id")
+  workerJobNumber       Int      @map("worker_job_number")
+  workerPayoutCents     Int      @default(175) @map("worker_payout_cents")
+  hirerCreditCents      Int      @default(325) @map("hirer_credit_cents")
+  stripeTransferId      String?  @unique @map("stripe_transfer_id")
+  payoutStatus          String   @default("PENDING") @map("payout_status")
+  payoutAttempts        Int      @default(0) @map("payout_attempts")
+  nextPayoutAttemptAt   DateTime @default(now()) @map("next_payout_attempt_at")
+  lastPayoutError       String?  @map("last_payout_error")
+  hirerCreditGrantedAt  DateTime? @map("hirer_credit_granted_at")
+  createdAt             DateTime @default(now()) @map("created_at")
+  updatedAt             DateTime @updatedAt @map("updated_at")
+  job                   Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@unique([workerId, workerJobNumber])
+  @@index([payoutStatus, createdAt])
+  @@map("job_incentives")
+}
+
+model Notification {
+  id          String   @id @default(cuid())
+  recipientId String   @map("recipient_id")
+  sourceKey   String   @unique @map("source_key")
+  type        String
+  title       String
+  body        String
+  smsText     String?  @map("sms_text")
+  href        String
+  readAt      DateTime? @map("read_at")
+  createdAt   DateTime @default(now()) @map("created_at")
+  recipient   UserProfile @relation(fields: [recipientId], references: [userId], onDelete: Cascade)
+  smsDelivery SmsDelivery?
+
+  @@index([recipientId, readAt, createdAt])
+  @@map("notifications")
+}
+
+model SmsDelivery {
+  id              String   @id @default(cuid())
+  notificationId  String   @unique @map("notification_id")
+  status          String   @default("PENDING")
+  attemptCount    Int      @default(0) @map("attempt_count")
+  nextAttemptAt   DateTime @default(now()) @map("next_attempt_at")
+  twilioMessageSid String? @unique @map("twilio_message_sid")
+  lastError       String?  @map("last_error")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+  notification    Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+
+  @@index([status, nextAttemptAt])
+  @@map("sms_deliveries")
 }
 
 model LeaderboardSeason {

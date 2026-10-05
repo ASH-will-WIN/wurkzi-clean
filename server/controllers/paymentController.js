@@ -1,8 +1,81 @@
 const { prisma, stripeClient } = require("../db");
 const { awardReferralRewardsForJob } = require("../services/referralService");
 const { awardLeaderboardPointsForJob } = require("../services/leaderboardService");
+const { processJobIncentive } = require("../services/jobIncentiveService");
+const { createNotification } = require("../services/notificationService");
 
 const PLATFORM_FEE_RATE = 0.1;
+
+async function notifyJobPayment(payment, io, type = "JOB_PAID") {
+  const job = await prisma.job.findUnique({ where: { id: payment.jobId }, select: { title: true } });
+  const label = type === "JOB_COMPLETED" ? "Job completed" : "Payment recorded";
+  const body = type === "JOB_COMPLETED"
+    ? `${job?.title || "A job"} was marked complete.`
+    : `Payment for ${job?.title || "your job"} was recorded.`;
+  await Promise.all([payment.hirerId, payment.workerId].map((recipientId) =>
+    createNotification({
+      recipientId,
+      sourceKey: `${type.toLowerCase()}:${payment.jobId}:${recipientId}`,
+      type,
+      title: label,
+      body,
+      smsText: body,
+      href: `/jobs/${payment.jobId}`,
+    }, io).catch((error) => console.error("Job notification failed:", error.message))
+  ));
+}
+
+async function notifyJobCompletion(job, workerId, io) {
+  const body = `${job.title || "A job"} was marked complete.`;
+  await Promise.all([job.hirerId, workerId].map((recipientId) =>
+    createNotification({
+      recipientId,
+      sourceKey: `job_completed:${job.id}:${recipientId}`,
+      type: "JOB_COMPLETED",
+      title: "Job completed",
+      body,
+      smsText: body,
+      href: `/jobs/${job.id}`,
+    }, io).catch((error) => console.error("Job completion notification failed:", error.message))
+  ));
+}
+
+async function markPaymentPaid(paymentId, io = null) {
+  const claimed = await prisma.payment.updateMany({
+    where: { id: paymentId, status: "PENDING" },
+    data: { status: "PAID", paidAt: new Date() },
+  });
+  if (!claimed.count) return prisma.payment.findUnique({ where: { id: paymentId } });
+  const payment = await prisma.payment.findUnique({ where: { id: paymentId } });
+  if (!payment) return null;
+  try { await notifyJobPayment(payment, io); } catch (error) { console.error("Payment notification failed:", error.message); }
+  await Promise.all([
+    processJobIncentive(payment.jobId).catch((error) => console.error("Job incentive processing failed:", error.message)),
+    awardPostPaymentRewards(payment.jobId),
+  ]);
+  return payment;
+}
+
+async function markPaymentFailedAndRestoreCredits(paymentId) {
+  return prisma.$transaction(async (tx) => {
+    const payment = await tx.payment.findUnique({ where: { id: paymentId } });
+    if (!payment || payment.status !== "PENDING") return payment;
+    await tx.payment.update({
+      where: { id: paymentId },
+      data: { status: "FAILED", creditsRestoredAt: new Date() },
+    });
+    if (payment.referralCreditAppliedCents || payment.referralDiscountCents) {
+      await tx.userProfile.update({
+        where: { userId: payment.hirerId },
+        data: {
+          ...(payment.referralCreditAppliedCents ? { platformCreditCents: { increment: payment.referralCreditAppliedCents } } : {}),
+          ...(payment.referralDiscountCents ? { postingDiscountCount: { increment: 1 } } : {}),
+        },
+      });
+    }
+    return { ...payment, status: "FAILED" };
+  });
+}
 
 async function createPayment(req, res) {
   let paymentIntent;
@@ -58,7 +131,9 @@ async function getPayments(req, res) {
   try {
     const { jobId } = req.query;
 
-    let whereClause = {};
+    const whereClause = {
+      OR: [{ hirerId: req.user.id }, { workerId: req.user.id }],
+    };
     if (jobId) {
       whereClause.jobId = jobId;
     }
@@ -133,6 +208,10 @@ async function getPayment(req, res) {
   try {
     const { id } = req.params;
     const payment = await prisma.payment.findUnique({ where: { id } });
+    if (!payment) return res.status(404).json({ error: "payment_not_found" });
+    if (payment.hirerId !== req.user.id && payment.workerId !== req.user.id) {
+      return res.status(403).json({ error: "not_authorized" });
+    }
     res.json(payment);
   } catch (error) {
     console.error(error);
@@ -169,6 +248,7 @@ async function deletePayment(req, res) {
 }
 
 async function createFinalPayment(req, res) {
+  let paymentIntent;
   try {
     const { jobId } = req.body; // Remove amount from destructuring
 
@@ -203,6 +283,10 @@ async function createFinalPayment(req, res) {
         error: "no_accepted_application",
         message: "No accepted application found for this job",
       });
+    }
+
+    if (await prisma.payment.findFirst({ where: { jobId, status: "PAID" } })) {
+      return res.status(409).json({ error: "job_already_paid", message: "This job already has a recorded payment." });
     }
 
     const workerId = job.applications[0].workerId;
@@ -242,7 +326,7 @@ async function createFinalPayment(req, res) {
     }
 
     // Create PaymentIntent with application fee and transfer to worker (destination charge)
-    const paymentIntent = await stripeClient.paymentIntents.create({
+    paymentIntent = await stripeClient.paymentIntents.create({
       amount: chargedAmountCents,
       currency: "usd",
       payment_method_types: ["card"],
@@ -250,18 +334,37 @@ async function createFinalPayment(req, res) {
         destination: stripeAccount.accountId,
         amount: workerAmountCents,
       },
-      metadata: { jobId, hirerId, workerId, type: "FINAL_PAYMENT", referralCreditAppliedCents, referralDiscountCents },
+      metadata: {
+        jobId,
+        hirerId,
+        workerId,
+        type: "FINAL_PAYMENT",
+        referralCreditAppliedCents: String(referralCreditAppliedCents),
+        referralDiscountCents: String(referralDiscountCents),
+      },
     });
 
     const payment = await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "jobs" WHERE "id" = ${jobId} FOR UPDATE`;
+      const activePayment = await tx.payment.findFirst({ where: { jobId, status: { in: ["PENDING", "PAID"] } } });
+      if (activePayment) {
+        const error = new Error("A payment for this job is already pending or complete.");
+        error.status = 409;
+        throw error;
+      }
       if (referralCreditAppliedCents || referralDiscountCents) {
-        await tx.userProfile.update({
-          where: { userId: hirerId },
+        const reserved = await tx.userProfile.updateMany({
+          where: {
+            userId: hirerId,
+            platformCreditCents: { gte: referralCreditAppliedCents },
+            postingDiscountCount: { gte: referralDiscountCents > 0 ? 1 : 0 },
+          },
           data: {
             ...(referralCreditAppliedCents ? { platformCreditCents: { decrement: referralCreditAppliedCents } } : {}),
             ...(referralDiscountCents ? { postingDiscountCount: { decrement: 1 } } : {}),
           },
         });
+        if (!reserved.count) throw new Error("Your available platform credit changed. Please retry payment.");
       }
       return tx.payment.create({
         data: {
@@ -286,8 +389,11 @@ async function createFinalPayment(req, res) {
       clientSecret: paymentIntent.client_secret,
     });
   } catch (error) {
+    if (paymentIntent?.id) {
+      try { await stripeClient.paymentIntents.cancel(paymentIntent.id); } catch (cancelError) { console.error("Payment cleanup error:", cancelError.message); }
+    }
     console.error("Final Payment Error:", error.message);
-    res.status(500).json({
+    res.status(error.status || 500).json({
       error: "final_payment_failed",
       message: error.message,
     });
@@ -318,13 +424,11 @@ async function confirmFinalPayment(req, res) {
       });
     }
 
-    // Mark payment as paid
-    const updatedPayment = await prisma.payment.update({
-      where: { id: paymentId },
-      data: { status: "PAID" },
-    });
-
-    await awardPostPaymentRewards(updatedPayment.jobId);
+    const intent = payment.stripePaymentId ? await stripeClient.paymentIntents.retrieve(payment.stripePaymentId) : null;
+    if (!intent || intent.status !== "succeeded") {
+      return res.status(409).json({ error: "payment_not_succeeded", message: "Stripe has not confirmed this payment yet." });
+    }
+    const updatedPayment = await markPaymentPaid(paymentId, req.app.get("io"));
 
     // Deposit refund logic removed as per revised business logic (0% platform fee, fee handling on application)
     // No additional transfer needed.
@@ -358,40 +462,15 @@ async function markJobPaidInCash(req, res) {
       return res.status(404).json({ error: "Job not found" });
     }
 
-    // Verify user authorization (must be worker or hirer, ideally worker initiates but hirer confirms? 
-    // Requirement says "Add a button on the worker side... marks the job as complete"
-    // So we trust the worker (or logic implies they got cash). 
-    // Let's verify the user is the assigned worker.
-
-    // Check authentication
-    /* 
-       NOTE: In a real prod app we might want the Hirer to confirm cash payment.
-       But user request says "button on the worker side... marks the job as complete and everything done".
-       So we will allow worker to do this.
-    */
-
-    // (Assuming middleware populates req.user - wait, looking at other controllers, they decode token manually sometimes?
-    // createPayment didn't look like it did manually, checks req.body. Let's look at markJobPaidInCash context.
-    // We should rely on req.user if auth middleware is used.
-    // Looking at paymentController.js imports... it doesn't import auth middleware but likely uses it in routes.
-    // I'll assume req.user is available OR I'll check how other sensitive ops are secured.
-    // finalPayment uses ensureAuthenticated in route probably?
-    // Let's look at jobController.js -> it manually decodes token in some places.
-    // Safe bet: stick to simple logic first, maybe check existing patterns.
-    // createFinalPayment checks "worker_not_onboarded" etc but doesn't explicitly check req.user vs workerId in body??
-    // Actually createFinalPayment takes jobId from body.
-
-    // Let's proceed with robust check for Worker.
-
-    if (job.status !== "COMPLETED" && job.status !== "IN_PROGRESS") {
-      // The user said "bypasses stripe stuff and marks job as complete".
-      // If it's IN_PROGRESS, we should probably mark it COMPLETED too?
-      // Request: "marks the job as complete and everything done"
-      // So if it is IN_PROGRESS, we upgrade it.
-    }
+    const alreadyPaid = await prisma.payment.findFirst({ where: { jobId, status: "PAID" } });
+    if (alreadyPaid) return res.status(409).json({ error: "job_already_paid", message: "This job already has a recorded payment." });
 
     if (job.applications.length === 0) {
       return res.status(400).json({ error: "No accepted application found." });
+    }
+
+    if (!["IN_PROGRESS", "COMPLETED"].includes(job.status)) {
+      return res.status(409).json({ error: "job_not_ready_for_cash", message: "The job must be in progress or complete before cash can be recorded." });
     }
 
     const workerId = job.applications[0].workerId;
@@ -402,35 +481,68 @@ async function markJobPaidInCash(req, res) {
       return res.status(403).json({ error: "not_authorized", message: "Only the assigned worker can mark a cash payment." });
     }
 
-    // Create a PAID payment record
-    const payment = await prisma.payment.create({
-      data: {
-        jobId,
-        amount,
-        platformFee: 0,
-        workerAmount: amount, // Full cash amount
-        hirerId,
-        workerId,
-        stripePaymentId: "CASH_PAYMENT_" + Date.now(),
-        status: "PAID",
-      },
-    });
-
-    // Ensure Job is marked COMPLETED
-    if (job.status !== "COMPLETED") {
-      await prisma.job.update({
-        where: { id: jobId },
-        data: { status: "COMPLETED" },
-      });
+    const pendingPayments = await prisma.payment.findMany({ where: { jobId, status: "PENDING" } });
+    for (const pending of pendingPayments) {
+      if (!pending.stripePaymentId) {
+        await markPaymentFailedAndRestoreCredits(pending.id);
+        continue;
+      }
+      const intent = await stripeClient.paymentIntents.retrieve(pending.stripePaymentId);
+      if (["succeeded", "processing"].includes(intent.status)) {
+        return res.status(409).json({ error: "payment_in_progress", message: "A Stripe payment for this job is already processing." });
+      }
+      if (intent.status !== "canceled") {
+        try { await stripeClient.paymentIntents.cancel(intent.id); } catch (error) {
+          return res.status(409).json({ error: "payment_cannot_be_cancelled", message: "A Stripe payment attempt must be resolved before cash can be recorded." });
+        }
+      }
+      await markPaymentFailedAndRestoreCredits(pending.id);
     }
 
-    await awardPostPaymentRewards(jobId);
+    // Create a PAID payment record
+    const payment = await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "jobs" WHERE "id" = ${jobId} FOR UPDATE`;
+      const activePayment = await tx.payment.findFirst({ where: { jobId, status: { in: ["PENDING", "PAID"] } } });
+      if (activePayment) {
+        const error = new Error("A card payment for this job is already pending or complete.");
+        error.status = 409;
+        throw error;
+      }
+      const created = await tx.payment.create({
+        data: {
+          jobId,
+          amount,
+          platformFee: 0,
+          workerAmount: amount,
+          hirerId,
+          workerId,
+          stripePaymentId: `CASH_PAYMENT_${jobId}`,
+          status: "PAID",
+          paidAt: new Date(),
+        },
+      });
+      if (job.status !== "COMPLETED") {
+        await tx.job.update({ where: { id: jobId }, data: { status: "COMPLETED" } });
+      }
+      return created;
+    });
+
+    try {
+      if (job.status !== "COMPLETED") await notifyJobCompletion(job, workerId, req.app.get("io"));
+      await notifyJobPayment(payment, req.app.get("io"));
+    } catch (error) {
+      console.error("Cash payment notification failed:", error.message);
+    }
+    await Promise.all([
+      processJobIncentive(jobId).catch((error) => console.error("Job incentive processing failed:", error.message)),
+      awardPostPaymentRewards(jobId),
+    ]);
 
     res.json({ message: "Job marked as paid in cash", payment });
 
   } catch (error) {
     console.error("Mark Job Paid In Cash Error:", error.message);
-    res.status(500).json({
+    res.status(error.status || 500).json({
       error: "cash_payment_failed",
       message: error.message,
     });
@@ -483,6 +595,8 @@ module.exports = {
   createFinalPayment,
   confirmFinalPayment,
   markJobPaidInCash,
+  markPaymentPaid,
+  markPaymentFailedAndRestoreCredits,
   getMyPayments,
   getWorkerEarnings,
 };

@@ -24,6 +24,9 @@ const referralRoutes = require("./routes/referral");
 const leaderboardRoutes = require("./routes/leaderboard");
 const profileRoutes = require("./routes/profile");
 const blockRoutes = require("./routes/block");
+const notificationRoutes = require("./routes/notification");
+const { startSmsOutbox } = require("./services/smsOutbox");
+const { startIncentiveRetryWorker } = require("./services/jobIncentiveService");
 
 // Webhook routes (must be before express.json middleware)
 app.use("/api/webhooks", webhookRoutes);
@@ -75,6 +78,9 @@ io.use(async (socket, next) => {
 
   const { data, error } = await supabase.auth.getUser(token);
   if (error || !data?.user) return next(new Error("Unauthorized"));
+  if (!(data.user.email_confirmed_at || data.user.confirmed_at)) {
+    return next(new Error("EMAIL_NOT_VERIFIED"));
+  }
   socket.userId = data.user.id;
   next();
 });
@@ -104,6 +110,7 @@ app.use("/api/referrals", referralRoutes);
 app.use("/api/leaderboards", leaderboardRoutes);
 app.use("/api/profile", profileRoutes);
 app.use("/api/blocks", blockRoutes);
+app.use("/api/notifications", notificationRoutes);
 
 app.get("/", (req, res) => {
   res.send("Wurkzi API is running");
@@ -117,5 +124,6 @@ app.get("/", (req, res) => {
 
 server.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
+  startSmsOutbox();
+  startIncentiveRetryWorker();
 });
-

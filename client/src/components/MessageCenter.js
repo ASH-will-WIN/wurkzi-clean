@@ -35,6 +35,13 @@ const formatDay = (value) => {
   return new Intl.DateTimeFormat([], { month: "long", day: "numeric", year: "numeric" }).format(date);
 };
 const sameDay = (first, second) => new Date(first).toDateString() === new Date(second).toDateString();
+const mergeMessages = (...groups) => {
+  const unique = new Map();
+  groups.flat().forEach((message) => {
+    if (message?.id) unique.set(message.id, { ...unique.get(message.id), ...message });
+  });
+  return [...unique.values()].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+};
 
 function Avatar({ participant, size = "h-10 w-10" }) {
   if (participant?.avatarUrl) return <img className={`${size} shrink-0 rounded-full object-cover`} src={participant.avatarUrl} alt="" />;
@@ -101,10 +108,12 @@ const MessageCenter = ({ initialTargetUserId, initialTargetJobId }) => {
   const { token, user } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
-  const requestedConversationId = useRef(location.state?.conversationId || null);
+  const requestedConversationId = useRef(null);
   const activeRef = useRef(null);
   const messageListRef = useRef(null);
   const stickToBottomRef = useRef(true);
+  const conversationRequestRef = useRef(0);
+  const inboxRequestRef = useRef(0);
   const [conversations, setConversations] = useState([]);
   const [activeConversation, setActiveConversation] = useState(null);
   const [messages, setMessages] = useState([]);
@@ -121,31 +130,69 @@ const MessageCenter = ({ initialTargetUserId, initialTargetJobId }) => {
   const [sending, setSending] = useState(false);
   const [showBlockDialog, setShowBlockDialog] = useState(false);
   const [blocking, setBlocking] = useState(false);
+  const [readOnlyReason, setReadOnlyReason] = useState("");
+  const [viewportHeight, setViewportHeight] = useState(() => window.visualViewport?.height || window.innerHeight);
+
+  useEffect(() => {
+    const updateViewport = () => setViewportHeight(window.visualViewport?.height || window.innerHeight);
+    window.visualViewport?.addEventListener("resize", updateViewport);
+    window.addEventListener("resize", updateViewport);
+    return () => {
+      window.visualViewport?.removeEventListener("resize", updateViewport);
+      window.removeEventListener("resize", updateViewport);
+    };
+  }, []);
 
   const refreshInbox = useCallback(async () => {
+    const requestId = ++inboxRequestRef.current;
     const items = await getConversations();
-    setConversations(items);
+    if (requestId === inboxRequestRef.current) setConversations(items);
     return items;
   }, []);
 
   const openConversation = useCallback(async (conversation) => {
     if (!conversation) return;
+    const requestId = ++conversationRequestRef.current;
     activeRef.current = conversation;
     setActiveConversation(conversation);
+    const existingStatus = String(conversation.applicationStatus || "").toUpperCase();
+    setReadOnlyReason(conversation.messagingAllowed === false
+      ? existingStatus === "REJECTED"
+        ? "This application was declined. You can read the conversation, but can’t send new messages."
+        : existingStatus === "WITHDRAWN"
+          ? "This application was withdrawn. You can read the conversation, but can’t send new messages."
+          : "This conversation is read-only because messaging is no longer available for this job."
+      : "");
+    setMessages([]);
+    setNextCursor(null);
     setMobileConversationOpen(true);
     setMessageLoading(true);
     setShowNewMessages(false);
     stickToBottomRef.current = true;
     try {
       const data = await getConversationMessages(conversation.id);
-      setMessages(data.messages || []);
+      if (requestId !== conversationRequestRef.current || activeRef.current?.id !== conversation.id) return;
+      const applicationStatus = String(data.applicationStatus || conversation.applicationStatus || "").toUpperCase();
+      const messagingAllowed = data.messagingAllowed ?? conversation.messagingAllowed;
+      const readOnly = messagingAllowed === false
+        ? applicationStatus === "REJECTED"
+          ? "This application was declined. You can read the conversation, but can’t send new messages."
+          : applicationStatus === "WITHDRAWN"
+            ? "This application was withdrawn. You can read the conversation, but can’t send new messages."
+            : "This conversation is read-only because messaging is no longer available for this job."
+        : "";
+      const updatedConversation = { ...conversation, messagingAllowed, applicationStatus };
+      activeRef.current = updatedConversation;
+      setActiveConversation(updatedConversation);
+      setReadOnlyReason(readOnly);
+      setMessages(mergeMessages(data.messages || []));
       setNextCursor(data.nextCursor || null);
       await markConversationAsRead(conversation.id);
       setConversations((items) => items.map((item) => item.id === conversation.id ? { ...item, unreadCount: 0 } : item));
     } catch (error) {
-      setComposerError(error.response?.data?.message || "Could not load this conversation.");
+      if (requestId === conversationRequestRef.current) setComposerError(error.response?.data?.message || "Could not load this conversation.");
     } finally {
-      setMessageLoading(false);
+      if (requestId === conversationRequestRef.current) setMessageLoading(false);
     }
   }, []);
 
@@ -154,6 +201,9 @@ const MessageCenter = ({ initialTargetUserId, initialTargetJobId }) => {
     const boot = async () => {
       setInboxLoading(true);
       try {
+        requestedConversationId.current = location.state?.conversationId
+          || new URLSearchParams(location.search).get("conversationId")
+          || null;
         let items = await refreshInbox();
         let target = items.find((item) => item.id === requestedConversationId.current);
         if (!target && initialTargetUserId) {
@@ -170,7 +220,7 @@ const MessageCenter = ({ initialTargetUserId, initialTargetJobId }) => {
     };
     boot();
     return () => { live = false; };
-  }, [initialTargetJobId, initialTargetUserId, openConversation, refreshInbox]);
+  }, [initialTargetJobId, initialTargetUserId, location.search, location.state?.conversationId, openConversation, refreshInbox]);
 
   useEffect(() => {
     const socket = connectMessageRealtime(token);
@@ -178,7 +228,7 @@ const MessageCenter = ({ initialTargetUserId, initialTargetJobId }) => {
     const onNewMessage = ({ conversationId, message }) => {
       const active = activeRef.current;
       if (active?.id === conversationId) {
-        setMessages((current) => current.some((item) => item.id === message.id) ? current : [...current, message]);
+        setMessages((current) => mergeMessages(current, [message]));
         if (!stickToBottomRef.current) setShowNewMessages(true);
       }
       refreshInbox().catch(() => {});
@@ -194,17 +244,41 @@ const MessageCenter = ({ initialTargetUserId, initialTargetJobId }) => {
       if (active && (active.participant.userId === userId || active.participant.userId === blockedId)) {
         setActiveConversation(null);
         activeRef.current = null;
+        conversationRequestRef.current += 1;
         setMessages([]);
         setMobileConversationOpen(false);
+      }
+    };
+    const onApplicationStatus = ({ jobId, workerId, status }) => {
+      const active = activeRef.current;
+      const normalizedStatus = String(status || "").toUpperCase();
+      if (
+        active?.job?.id === jobId &&
+        [user?.id, active.participant?.userId].includes(workerId) &&
+        ["REJECTED", "WITHDRAWN"].includes(normalizedStatus)
+      ) {
+        setReadOnlyReason(normalizedStatus === "REJECTED"
+          ? "This application was declined. You can read the conversation, but can’t send new messages."
+          : "This application was withdrawn. You can read the conversation, but can’t send new messages.");
+      }
+    };
+    const onJobStatus = ({ jobId, status }) => {
+      const active = activeRef.current;
+      if (active?.job?.id === jobId && active.applicationStatus === "APPLIED" && ["COMMITTED", "CANCELLED"].includes(String(status || "").toUpperCase())) {
+        setReadOnlyReason("This job is no longer accepting applications. You can read the conversation, but can’t send new messages.");
       }
     };
     socket.on("message:new", onNewMessage);
     socket.on("conversation:read", onRead);
     socket.on("conversation:blocked", onBlocked);
+    socket.on("application:status", onApplicationStatus);
+    socket.on("job:status", onJobStatus);
     return () => {
       socket.off("message:new", onNewMessage);
       socket.off("conversation:read", onRead);
       socket.off("conversation:blocked", onBlocked);
+      socket.off("application:status", onApplicationStatus);
+      socket.off("job:status", onJobStatus);
       disconnectMessageRealtime();
     };
   }, [refreshInbox, token, user?.id]);
@@ -218,21 +292,24 @@ const MessageCenter = ({ initialTargetUserId, initialTargetJobId }) => {
 
   const loadOlder = async () => {
     if (!activeConversation || !nextCursor || loadingOlder) return;
+    const conversationId = activeConversation.id;
+    const requestId = conversationRequestRef.current;
     const list = messageListRef.current;
     const previousHeight = list?.scrollHeight || 0;
     setLoadingOlder(true);
     stickToBottomRef.current = false;
     try {
-      const data = await getConversationMessages(activeConversation.id, nextCursor);
-      setMessages((current) => [...(data.messages || []), ...current]);
+      const data = await getConversationMessages(conversationId, nextCursor);
+      if (requestId !== conversationRequestRef.current || activeRef.current?.id !== conversationId) return;
+      setMessages((current) => mergeMessages(data.messages || [], current));
       setNextCursor(data.nextCursor || null);
       requestAnimationFrame(() => {
         if (list) list.scrollTop += list.scrollHeight - previousHeight;
       });
     } catch (error) {
-      setComposerError("Could not load older messages.");
+      if (requestId === conversationRequestRef.current) setComposerError("Could not load older messages.");
     } finally {
-      setLoadingOlder(false);
+      if (requestId === conversationRequestRef.current) setLoadingOlder(false);
     }
   };
 
@@ -255,17 +332,20 @@ const MessageCenter = ({ initialTargetUserId, initialTargetJobId }) => {
 
   const handleSend = async () => {
     if (!activeConversation || sending || (!draft.trim() && !attachment)) return;
+    const conversationId = activeConversation.id;
     setSending(true);
     setComposerError("");
     stickToBottomRef.current = true;
     try {
-      const message = await sendMessage(activeConversation.id, { content: draft.trim(), imageDataUrl: attachment?.dataUrl || null });
-      setMessages((current) => current.some((item) => item.id === message.id) ? current : [...current, message]);
-      setDraft("");
-      setAttachment(null);
+      const message = await sendMessage(conversationId, { content: draft.trim(), imageDataUrl: attachment?.dataUrl || null });
+      if (activeRef.current?.id === conversationId) {
+        setMessages((current) => mergeMessages(current, [message]));
+        setDraft("");
+        setAttachment(null);
+      }
       await refreshInbox();
     } catch (error) {
-      setComposerError(error.response?.data?.message || "Message failed to send. Try again.");
+      if (activeRef.current?.id === conversationId) setComposerError(error.response?.data?.message || "Message failed to send. Try again.");
     } finally {
       setSending(false);
     }
@@ -279,6 +359,7 @@ const MessageCenter = ({ initialTargetUserId, initialTargetJobId }) => {
       setConversations((items) => items.filter((item) => item.id !== activeConversation.id));
       setActiveConversation(null);
       activeRef.current = null;
+      conversationRequestRef.current += 1;
       setMessages([]);
       setMobileConversationOpen(false);
       setShowBlockDialog(false);
@@ -297,7 +378,7 @@ const MessageCenter = ({ initialTargetUserId, initialTargetJobId }) => {
   const showPane = Boolean(activeConversation);
 
   return (
-    <section className="mx-auto flex h-[calc(100dvh-5rem)] max-w-6xl overflow-hidden border border-slate-800 bg-slate-950 md:my-6 md:h-[calc(100dvh-8rem)] md:rounded-xl">
+    <section style={{ "--message-viewport-height": `${viewportHeight}px` }} className="mx-auto flex h-[calc(var(--message-viewport-height)-5rem)] max-w-6xl overflow-hidden border border-slate-800 bg-slate-950 md:my-6 md:h-[calc(var(--message-viewport-height)-8rem)] md:rounded-xl">
       <aside className={`${showList ? "flex" : "hidden"} w-full min-w-0 flex-col border-r border-slate-800 bg-slate-950 md:flex md:w-[22rem]`} aria-label="Conversations">
         <div className="border-b border-slate-800 p-4">
           <h1 className="text-xl font-bold text-white">Messages</h1>
@@ -323,10 +404,11 @@ const MessageCenter = ({ initialTargetUserId, initialTargetJobId }) => {
             {messageLoading ? <p className="text-center text-sm text-slate-400">Loading messages…</p> : messages.length ? messages.map((message, index) => <MessageBubble key={message.id} message={message} own={message.senderId === user?.id} showDay={index === 0 || !sameDay(messages[index - 1].createdAt, message.createdAt)} />) : <div className="pt-16 text-center"><p className="font-medium text-white">Start the conversation</p><p className="mt-1 text-sm text-slate-400">Send a message to {activeConversation.participant.displayName}.</p></div>}
             {showNewMessages && <button type="button" onClick={() => { stickToBottomRef.current = true; messageListRef.current?.scrollTo({ top: messageListRef.current.scrollHeight, behavior: "smooth" }); setShowNewMessages(false); }} className="sticky bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-wurkzi-600 px-3 py-2 text-sm font-medium text-white shadow-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-white">New messages</button>}
           </div>
-          <div className="border-t border-slate-800 bg-slate-950 p-3 sm:p-4">
+          <div className="border-t border-slate-800 bg-slate-950 p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] sm:p-4 sm:pb-[calc(1rem+env(safe-area-inset-bottom))]">
+            {readOnlyReason && <p className="mb-3 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-300" role="status">{readOnlyReason}</p>}
             {attachment && <div className="mb-2 flex items-center gap-2"><img src={attachment.dataUrl} alt="Attachment preview" className="h-14 w-14 rounded-lg object-cover" /><span className="min-w-0 flex-1 truncate text-sm text-slate-300">{attachment.name}</span><button type="button" onClick={() => setAttachment(null)} className="rounded p-1 text-slate-400 hover:bg-slate-800 hover:text-white" aria-label="Remove photo">×</button></div>}
             {composerError && <p className="mb-2 text-sm text-red-300" role="alert">{composerError}</p>}
-            <div className="flex items-end gap-2"><label className="cursor-pointer rounded-lg p-2 text-slate-300 hover:bg-slate-800 focus-within:ring-2 focus-within:ring-wurkzi-400"><span className="sr-only">Attach a photo</span><input type="file" accept={IMAGE_TYPES.join(",")} onChange={prepareAttachment} className="sr-only" />📎</label><textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); handleSend(); } }} maxLength={2000} rows={1} placeholder="Write a message" disabled={sending} className="max-h-32 min-h-10 flex-1 resize-none rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white placeholder-slate-500 outline-none focus:border-wurkzi-400 focus:ring-1 focus:ring-wurkzi-400 disabled:opacity-50" aria-label="Message" /><button type="button" onClick={handleSend} disabled={sending || (!draft.trim() && !attachment)} className="rounded-lg bg-wurkzi-600 px-3 py-2 text-sm font-semibold text-white hover:bg-wurkzi-500 disabled:cursor-not-allowed disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-wurkzi-300">{sending ? "Sending…" : "Send"}</button></div>
+            {!readOnlyReason && <div className="flex items-end gap-2"><label className="cursor-pointer rounded-lg p-2 text-slate-300 hover:bg-slate-800 focus-within:ring-2 focus-within:ring-wurkzi-400"><span className="sr-only">Attach a photo</span><input type="file" accept={IMAGE_TYPES.join(",")} onChange={prepareAttachment} className="sr-only" />📎</label><textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); handleSend(); } }} maxLength={2000} rows={1} placeholder="Write a message" disabled={sending} className="max-h-32 min-h-10 flex-1 resize-none rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white placeholder-slate-500 outline-none focus:border-wurkzi-400 focus:ring-1 focus:ring-wurkzi-400 disabled:opacity-50" aria-label="Message" /><button type="button" onClick={handleSend} disabled={sending || (!draft.trim() && !attachment)} className="rounded-lg bg-wurkzi-600 px-3 py-2 text-sm font-semibold text-white hover:bg-wurkzi-500 disabled:cursor-not-allowed disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-wurkzi-300">{sending ? "Sending…" : "Send"}</button></div>}
           </div>
         </>}
       </main>

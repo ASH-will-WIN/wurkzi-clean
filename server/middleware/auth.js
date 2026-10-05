@@ -22,6 +22,7 @@ const authMiddleware = async (req, res, next) => {
       id: data.user.id,
       email: data.user.email,
       user_metadata: data.user.user_metadata,
+      emailConfirmedAt: data.user.email_confirmed_at || data.user.confirmed_at || null,
     };
 
     next();
@@ -34,4 +35,16 @@ const authMiddleware = async (req, res, next) => {
     });
   }
 };
+
+const requireVerifiedEmail = (req, res, next) => {
+  if (!req.user?.emailConfirmedAt) {
+    return res.status(403).json({
+      error: "Please verify your email to use this feature.",
+      code: "EMAIL_NOT_VERIFIED",
+    });
+  }
+  return next();
+};
+
+authMiddleware.requireVerifiedEmail = requireVerifiedEmail;
 module.exports = authMiddleware;

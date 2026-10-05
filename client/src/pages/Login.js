@@ -6,8 +6,10 @@ const Login = () => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
-  const { login } = useAuth();
+  const { login, resendVerification } = useAuth();
   const navigate = useNavigate();
+  const [needsVerification, setNeedsVerification] = useState(false);
+  const [resendMessage, setResendMessage] = useState("");
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -16,8 +18,20 @@ const Login = () => {
       await login(email, password);
       navigate("/jobs/new");
     } catch (err) {
-      setError("Failed to log in. Please check your credentials.");
+      const code = err.response?.data?.code;
+      setNeedsVerification(code === "EMAIL_NOT_VERIFIED");
+      setError(code === "EMAIL_NOT_VERIFIED" ? "Please verify your email before signing in." : "Failed to log in. Please check your credentials.");
       console.error(err);
+    }
+  };
+
+  const handleResend = async () => {
+    setResendMessage("");
+    try {
+      await resendVerification(email);
+      setResendMessage("If this account needs verification, a new confirmation email has been sent.");
+    } catch (err) {
+      setError(err.response?.data?.error || "Could not resend the confirmation email.");
     }
   };
 
@@ -76,6 +90,12 @@ const Login = () => {
               {error}
             </div>
           )}
+          {needsVerification && (
+            <button type="button" onClick={handleResend} className="text-sm text-wurkzi-300 hover:text-white underline">
+              Resend confirmation email
+            </button>
+          )}
+          {resendMessage && <p role="status" className="text-sm text-emerald-300">{resendMessage}</p>}
         </form>
 
         <div className="mt-8 pt-6 border-t border-slate-700/50">

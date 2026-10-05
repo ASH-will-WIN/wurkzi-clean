@@ -14,6 +14,7 @@ const Onboarding = () => {
         const { onboardingUrl } = await connectApi.createStripeAccountLink();
         setStripeUrl(onboardingUrl);
         setLoading(false);
+        window.location.assign(onboardingUrl);
       } catch (err) {
         console.error("Failed to create onboarding link:", err);
         setError("Failed to create onboarding link. Please try again.");
@@ -41,11 +42,7 @@ const Onboarding = () => {
   return (
     <div className="onboarding-page">
       <h1>Complete Stripe Connect Onboarding</h1>
-      <p>
-        To continue using Wurkzi as a worker or client, you need to complete
-        your Stripe Connect onboarding. This will allow you to receive payments
-        securely.
-      </p>
+      <p>Opening Stripe&apos;s secure payout setup…</p>
       <div className="onboarding-actions">
         <button onClick={handleContinue} className="btn-primary">
           Continue to Stripe Onboarding
