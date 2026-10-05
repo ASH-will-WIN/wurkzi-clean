@@ -10,6 +10,11 @@ export const confirmApplicationDeposit = async (applicationId) => {
   return response.data;
 };
 
+export const resumeApplicationDeposit = async (applicationId) => {
+  const response = await apiClient.post(`/applications/${applicationId}/resume-deposit`);
+  return response.data;
+};
+
 export const getMyApplications = async () => {
   const response = await apiClient.get("/applications");
   return response.data;

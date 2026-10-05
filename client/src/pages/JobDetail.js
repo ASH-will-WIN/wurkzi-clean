@@ -7,6 +7,7 @@ import {
   acceptApplication,
   rejectApplication,
   confirmApplicationDeposit,
+  resumeApplicationDeposit,
 } from "../api/applicationApi";
 import { useAuth } from "../context/AuthContext";
 import { useNavigate } from "react-router-dom";
@@ -82,6 +83,32 @@ const JobDetail = () => {
       // Fetch job data first to check hirer status
       const jobData = await getJobById(id);
       setJob(jobData);
+      const pendingApplication = jobData.applications?.find((application) =>
+        application.workerId === user?.id && (
+          application.status === "PENDING_PAYMENT"
+          || (application.status === "APPLIED" && application.depositStatus === "PENDING")
+        )
+      );
+      if (pendingApplication) {
+        setMessage(pendingApplication.message || "");
+        setPendingApplicationId(pendingApplication.id);
+        try {
+          const resume = await resumeApplicationDeposit(pendingApplication.id);
+          if (resume.clientSecret) {
+            setClientSecret(resume.clientSecret);
+            setShowPaymentForm(true);
+          } else if (resume.submitted) {
+            setShowPaymentForm(false);
+            setPendingApplicationId(null);
+            setClientSecret(null);
+            fetchJobAndApps();
+          }
+        } catch (resumeError) {
+          setPendingApplicationId(null);
+          setClientSecret(null);
+          setShowPaymentForm(false);
+        }
+      }
       if (jobData.status === "COMPLETED") {
         setReviews(await getReviewsForJob(id));
       }
@@ -162,7 +189,9 @@ const JobDetail = () => {
         setClientSecret(applicationData.clientSecret);
         setShowPaymentForm(true);
       } else {
-        alert("Application submitted using your $5 referral credit.");
+        alert(applicationData.submitted
+          ? "Your application is submitted."
+          : "Application submitted using your $5 referral credit.");
         setMessage("");
         fetchJobAndApps();
       }
@@ -246,11 +275,17 @@ const JobDetail = () => {
   }
 
   const hasApplied = job?.applications?.some(
-    (app) => app.workerId === user?.id && app.status !== "WITHDRAWN"
+    (app) => app.workerId === user?.id
+      && app.status !== "WITHDRAWN"
+      && app.status !== "PENDING_PAYMENT"
+      && !(app.status === "APPLIED" && app.depositStatus === "PENDING")
   );
 
   const currentUserApplication = job?.applications?.find(
-    (app) => app.workerId === user?.id && app.status !== "WITHDRAWN"
+    (app) => app.workerId === user?.id
+      && app.status !== "WITHDRAWN"
+      && app.status !== "PENDING_PAYMENT"
+      && !(app.status === "APPLIED" && app.depositStatus === "PENDING")
   );
 
 

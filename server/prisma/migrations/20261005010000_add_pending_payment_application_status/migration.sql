@@ -1,0 +1,1 @@
+ALTER TYPE "ApplicationStatus" ADD VALUE 'PENDING_PAYMENT';

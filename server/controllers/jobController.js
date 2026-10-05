@@ -169,6 +169,10 @@ async function getJob(req, res) {
         applications: {
           where: {
             workerId: req.user?.id,
+            OR: [
+              { status: { not: ApplicationStatus.APPLIED } },
+              { depositStatus: { in: [DepositStatus.AUTHORIZED, DepositStatus.CAPTURED] } },
+            ],
           },
         },
       },
@@ -177,7 +181,7 @@ async function getJob(req, res) {
     // If user is hirer or has accepted application, return full job details
     if (
       req.user?.id === job.hirerId ||
-      job.applications.length > 0 // User has applied (filtered by workerId above)
+      job.applications.some((application) => application.status !== ApplicationStatus.PENDING_PAYMENT)
     ) {
       res.json(job);
       return;
@@ -271,7 +275,7 @@ async function deleteJob(req, res) {
     // 4. Refund Workers: Cancel all authorized deposits
     const refundPromises = job.applications
       .filter(
-        (app) => app.depositId && app.depositStatus === DepositStatus.AUTHORIZED
+        (app) => app.depositId && [DepositStatus.AUTHORIZED, DepositStatus.PENDING].includes(app.depositStatus)
       )
       .map(async (app) => {
         try {
@@ -408,6 +412,8 @@ async function getJobImages(req, res) {
           where: {
             jobId: id,
             workerId: req.user.id,
+            status: { not: ApplicationStatus.PENDING_PAYMENT },
+            depositStatus: { in: [DepositStatus.AUTHORIZED, DepositStatus.CAPTURED] },
           },
         });
         canViewAllImages = !!application;
