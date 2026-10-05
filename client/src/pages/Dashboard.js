@@ -1312,6 +1312,10 @@ const HirerJobCard = ({
 }) => {
   const navigate = useNavigate();
   const isExpanded = selectedJob === job.id;
+  const submittedApplications = (job.applications || []).filter((app) =>
+    app.status !== "PENDING_PAYMENT"
+    && !(app.status === "APPLIED" && app.depositStatus === "PENDING")
+  );
 
   return (
     <div
@@ -1325,7 +1329,7 @@ const HirerJobCard = ({
           <div className="flex items-center gap-2 mt-2">
             <StatusBadge status={job.status} type="job" />
             <span className="text-xs text-slate-500">
-              {job.applications?.length || 0} applications
+              {submittedApplications.length} applications
             </span>
           </div>
         </div>
@@ -1376,12 +1380,12 @@ const HirerJobCard = ({
           {/* Applications List */}
           <div className="space-y-3">
             <h4 className="font-medium text-slate-200">Applications</h4>
-            {job.applications?.length === 0 ? (
+            {submittedApplications.length === 0 ? (
               <p className="text-slate-500 text-sm italic">
                 No applications yet.
               </p>
             ) : (
-              job.applications?.map((app) => (
+              submittedApplications.map((app) => (
                 <div
                   key={app.id}
                   className="bg-slate-800 p-3 rounded-lg border border-slate-700"
