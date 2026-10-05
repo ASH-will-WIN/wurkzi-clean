@@ -739,7 +739,7 @@ const JobDetail = () => {
               </div>
             )}
 
-            {job.status === "PENDING" && !showPaymentForm && !hasApplied && (
+            {job.status === "PENDING" && !hasApplied && (
               <div className="card">
                 <h3 className="text-xl font-semibold text-white mb-6">
                   Apply for this Job
@@ -802,6 +802,7 @@ const JobDetail = () => {
                         </label>
                         <textarea
                           required
+                          readOnly={showPaymentForm}
                           value={message}
                           onChange={(e) => setMessage(e.target.value)}
                           className="w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-4 focus:ring-2 focus:ring-amber-500 focus:border-transparent min-h-[120px]"
@@ -809,30 +810,42 @@ const JobDetail = () => {
                         />
                       </div>
 
-                      <button
-                        type="submit"
-                        className="w-full btn btn-primary py-4 text-lg font-bold flex items-center justify-center transition-all bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 border-none shadow-lg shadow-amber-900/20"
-                      >
-                        <svg
-                          className="w-6 h-6 mr-3"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
+                      {!showPaymentForm && (
+                        <button
+                          type="submit"
+                          className="w-full btn btn-primary py-4 text-lg font-bold flex items-center justify-center transition-all bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 border-none shadow-lg shadow-amber-900/20"
                         >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"
-                          />
-                        </svg>
-                        Pay $5 Deposit & Apply
-                      </button>
-
-                      <p className="text-center text-xs text-slate-500">
-                        You will be redirected to a secure payment page to complete your deposit.
-                      </p>
+                          <svg
+                            className="w-6 h-6 mr-3"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={2}
+                              d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"
+                            />
+                          </svg>
+                          Continue to Secure $5 Deposit
+                        </button>
+                      )}
                     </form>
+
+                    {showPaymentForm && clientSecret && (
+                      <div className="mt-6 border-t border-slate-700 pt-6">
+                        <h4 className="text-lg font-semibold text-white mb-3">Enter payment details to submit</h4>
+                        <p className="text-slate-400 text-sm mb-4">Your application message is ready. Finish payment to send it to the hirer.</p>
+                        <Elements stripe={stripePromise} options={{ clientSecret }}>
+                          <CheckoutForm
+                            clientSecret={clientSecret}
+                            onPaymentSuccess={onPaymentSuccess}
+                            onPaymentError={onPaymentError}
+                          />
+                        </Elements>
+                      </div>
+                    )}
                   </>
                 )}
               </div>
@@ -843,47 +856,6 @@ const JobDetail = () => {
                 <p className="text-amber-300 font-medium">
                   You have already applied for this job. Please wait for the hirer to review your application.
                 </p>
-              </div>
-            )}
-
-            {showPaymentForm && clientSecret && (
-              <div className="card">
-                <h3 className="text-xl font-semibold text-white mb-6">
-                  Complete Your Payment
-                </h3>
-                <div className="mb-6">
-                  <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-4 mb-4">
-                    <div className="flex items-center text-amber-400 mb-2">
-                      <svg
-                        className="w-5 h-5 mr-2"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-                        />
-                      </svg>
-                      <span className="font-medium">
-                        Almost there! Payment required to submit.
-                      </span>
-                    </div>
-                    <p className="text-slate-400 text-sm">
-                      Your application will <strong className="text-white">NOT be submitted</strong> until you complete the $5 deposit payment below.
-                    </p>
-                  </div>
-                </div>
-
-                <Elements stripe={stripePromise} options={{ clientSecret }}>
-                  <CheckoutForm
-                    clientSecret={clientSecret}
-                    onPaymentSuccess={onPaymentSuccess}
-                    onPaymentError={onPaymentError}
-                  />
-                </Elements>
               </div>
             )}
 
