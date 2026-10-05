@@ -616,6 +616,14 @@ async function getJobsByHirer(req, res) {
       where: { hirerId: req.user.id },
       include: {
         applications: {
+          where: {
+            NOT: {
+              OR: [
+                { status: ApplicationStatus.PENDING_PAYMENT },
+                { status: ApplicationStatus.APPLIED, depositStatus: DepositStatus.PENDING },
+              ],
+            },
+          },
           include: {
             // job: true, // REMOVED: Redundant and potentially heavy
             // If we need worker details (which we do for the dashboard to show who applied)
