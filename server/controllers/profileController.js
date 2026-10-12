@@ -59,6 +59,7 @@ async function serializeProfile(profile) {
   return {
     id: profile.id,
     userId: profile.userId,
+    phoneVerified: Boolean(profile.phoneVerifiedAt),
     displayName: profile.displayName,
     city: profile.city,
     bio: profile.bio,

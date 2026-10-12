@@ -7,40 +7,73 @@ const Register = () => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [phone, setPhone] = useState("");
+  const [phoneVerificationCode, setPhoneVerificationCode] = useState("");
+  const [phoneCodeSent, setPhoneCodeSent] = useState(false);
+  const [sendingPhoneCode, setSendingPhoneCode] = useState(false);
+  const [creatingAccount, setCreatingAccount] = useState(false);
   const [role] = useState("MEMBER"); // Default role (hidden from user)
   const [error, setError] = useState("");
   const [agreedToTerms, setAgreedToTerms] = useState(false);
   const [smsNotificationsEnabled, setSmsNotificationsEnabled] = useState(false);
   const location = useLocation();
   const [referralCode] = useState(() => new URLSearchParams(location.search).get("ref") || "");
-  const { register } = useAuth();
+  const { register, requestPhoneVerification } = useAuth();
   const navigate = useNavigate();
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
+  const validatePhoneAndTerms = () => {
     setError("");
 
     // Validate terms agreement
     if (!agreedToTerms) {
       setError("You must agree to the terms and conditions.");
-      return;
+      return false;
     }
 
     // Validate phone number
     if (!phone) {
       setError("Phone number is required.");
-      return;
+      return false;
     }
 
     // Basic phone number validation (at least 10 digits)
     const phoneRegex = /^\+?[\d\s\-\(\)]{10,}$/;
     if (!phoneRegex.test(phone)) {
       setError("Please enter a valid phone number.");
+      return false;
+    }
+    return true;
+  };
+
+  const handleSendPhoneCode = async () => {
+    if (!validatePhoneAndTerms()) return;
+    setSendingPhoneCode(true);
+    try {
+      await requestPhoneVerification(phone);
+      setPhoneCodeSent(true);
+      setPhoneVerificationCode("");
+      setError("");
+    } catch (err) {
+      setError(err.response?.data?.error || "Could not send a verification code.");
+    } finally {
+      setSendingPhoneCode(false);
+    }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!validatePhoneAndTerms()) return;
+    if (!phoneCodeSent) {
+      await handleSendPhoneCode();
+      return;
+    }
+    if (!/^\d{4,10}$/.test(phoneVerificationCode.trim())) {
+      setError("Enter the verification code sent to your phone.");
       return;
     }
 
+    setCreatingAccount(true);
     try {
-      const result = await register(name, email, password, role, phone, referralCode, smsNotificationsEnabled);
+      const result = await register(name, email, password, role, phone, phoneVerificationCode.trim(), referralCode, smsNotificationsEnabled);
       if (result?.requiresEmailVerification) {
         navigate("/verify-email", { state: { email: result.email || email, sent: true } });
       } else {
@@ -53,8 +86,16 @@ const Register = () => {
       } else {
         setError("Failed to register.");
       }
-      console.error(err);
+    } finally {
+      setCreatingAccount(false);
     }
+  };
+
+  const handlePhoneChange = (value) => {
+    setPhone(value);
+    setPhoneCodeSent(false);
+    setPhoneVerificationCode("");
+    setError("");
   };
 
   return (
@@ -113,12 +154,39 @@ const Register = () => {
               type="tel"
               placeholder="+1 (555) 000-0000"
               value={phone}
-              onChange={(e) => setPhone(e.target.value)}
+              onChange={(e) => handlePhoneChange(e.target.value)}
               autoComplete="tel"
               className="w-full px-4 py-3 bg-slate-950/50 border border-slate-700 rounded-xl focus:ring-2 focus:ring-wurkzi-500 focus:border-transparent outline-none transition-all text-white placeholder-slate-500"
               required
             />
           </div>
+
+          {phoneCodeSent && (
+            <div className="text-left space-y-2">
+              <label htmlFor="phone-verification-code" className="block text-sm font-medium text-slate-300">
+                Text message code
+              </label>
+              <input
+                id="phone-verification-code"
+                type="text"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                pattern="[0-9]{4,10}"
+                maxLength={10}
+                placeholder="Enter your code"
+                value={phoneVerificationCode}
+                onChange={(e) => setPhoneVerificationCode(e.target.value.replace(/\D/g, ""))}
+                className="w-full px-4 py-3 bg-slate-950/50 border border-slate-700 rounded-xl focus:ring-2 focus:ring-wurkzi-500 focus:border-transparent outline-none transition-all text-white placeholder-slate-500"
+                required
+              />
+              <div className="flex items-center justify-between gap-3 text-xs text-slate-400">
+                <span>We sent a one-time code to {phone}.</span>
+                <button type="button" onClick={handleSendPhoneCode} disabled={sendingPhoneCode || creatingAccount} className="shrink-0 text-wurkzi-400 hover:text-white disabled:opacity-50">
+                  {sendingPhoneCode ? "Sending…" : "Resend code"}
+                </button>
+              </div>
+            </div>
+          )}
 
           <div className="text-left">
             <label className="block text-sm font-medium text-slate-300 mb-1">
@@ -176,10 +244,10 @@ const Register = () => {
 
           <button
             type="submit"
-            disabled={!agreedToTerms}
+            disabled={!agreedToTerms || sendingPhoneCode || creatingAccount}
             className="w-full py-3.5 mt-2 bg-gradient-to-r from-wurkzi-600 to-purple-600 hover:from-wurkzi-500 hover:to-purple-500 text-white font-bold rounded-xl shadow-lg shadow-purple-900/20 transition-all duration-300 hover:-translate-y-0.5 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0"
           >
-            Create Account
+            {sendingPhoneCode ? "Sending code…" : creatingAccount ? "Creating account…" : phoneCodeSent ? "Verify phone & create account" : "Text me a verification code"}
           </button>
 
           {error && (

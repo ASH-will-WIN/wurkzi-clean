@@ -5,6 +5,11 @@ export const registerUser = async (userData) => {
   return response.data;
 };
 
+export const sendPhoneVerification = async (phone) => {
+  const response = await apiClient.post("/auth/phone-verification/start", { phone });
+  return response.data;
+};
+
 export const loginUser = async (credentials) => {
   const response = await apiClient.post("/auth/login", credentials);
   return response.data;

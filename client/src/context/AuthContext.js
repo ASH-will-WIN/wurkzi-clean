@@ -1,5 +1,5 @@
 import React, { createContext, useState, useEffect, useContext, useCallback } from "react";
-import { loginUser, registerUser, resendEmailVerification, verifyEmailSession } from "../api/authApi";
+import { loginUser, registerUser, resendEmailVerification, sendPhoneVerification, verifyEmailSession } from "../api/authApi";
 import { apiClient } from "../api/apiClient";
 import { getMyProfile } from "../api/profileApi";
 
@@ -48,13 +48,14 @@ export const AuthProvider = ({ children }) => {
     // Note: Onboarding status will be checked on Dashboard load
   };
 
-  const register = async (name, email, password, role, phone, referralCode, smsNotificationsEnabled = false) => {
+  const register = async (name, email, password, role, phone, phoneVerificationCode, referralCode, smsNotificationsEnabled = false) => {
     const result = await registerUser({
       name,
       email,
       password,
       role,
       phone,
+      phoneVerificationCode,
       referralCode,
       ...(smsNotificationsEnabled ? { smsNotificationsEnabled: true } : {}),
     });
@@ -74,6 +75,7 @@ export const AuthProvider = ({ children }) => {
   };
 
   const resendVerification = async (email) => resendEmailVerification(email);
+  const requestPhoneVerification = async (phone) => sendPhoneVerification(phone);
 
   const completeEmailVerification = useCallback(async (accessToken, refreshToken) => {
     const { user } = await verifyEmailSession(accessToken);
@@ -103,6 +105,7 @@ export const AuthProvider = ({ children }) => {
     token,
     login,
     register,
+    requestPhoneVerification,
     resendVerification,
     completeEmailVerification,
     logout,

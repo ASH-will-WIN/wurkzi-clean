@@ -31,6 +31,43 @@ async function createTwilioMessage(to, body, extra = {}) {
   return client.messages.create({ to: destination, body, ...sender, ...extra });
 }
 
+function getVerifyService() {
+  const serviceSid = process.env.TWILIO_VERIFY_SERVICE_SID;
+  if (!client || !serviceSid) {
+    const error = new Error("Phone verification is not configured");
+    error.code = "PHONE_VERIFICATION_NOT_CONFIGURED";
+    throw error;
+  }
+  return client.verify.v2.services(serviceSid);
+}
+
+async function startPhoneVerification(phone) {
+  const destination = normalizePhoneNumber(phone);
+  if (!destination) {
+    const error = new Error("Please enter a valid phone number");
+    error.code = "INVALID_PHONE_NUMBER";
+    throw error;
+  }
+  return getVerifyService().verifications.create({ to: destination, channel: "sms" });
+}
+
+async function checkPhoneVerification(phone, code) {
+  const destination = normalizePhoneNumber(phone);
+  if (!destination) return false;
+  try {
+    const result = await getVerifyService().verificationChecks.create({
+      to: destination,
+      code: String(code).trim(),
+    });
+    return result.status === "approved";
+  } catch (error) {
+    // Twilio removes verification records after approval, expiry, or max attempts.
+    // Treat those outcomes as a failed code; let other provider/configuration errors surface.
+    if (error.status === 404 || [20404, 60202].includes(Number(error.code))) return false;
+    throw error;
+  }
+}
+
 /**
  * Send SMS notification to a user
  * @param {string} to - Phone number to send SMS to
@@ -72,4 +109,6 @@ module.exports = {
   getUserPhoneNumber,
   createTwilioMessage,
   normalizePhoneNumber,
+  startPhoneVerification,
+  checkPhoneVerification,
 };

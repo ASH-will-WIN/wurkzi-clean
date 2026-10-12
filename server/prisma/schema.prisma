@@ -147,6 +147,7 @@ model UserProfile {
   id                   String   @id @default(cuid())
   userId               String   @unique @map("user_id")
   phone                String?
+  phoneVerifiedAt      DateTime? @map("phone_verified_at")
   displayName          String?  @map("display_name")
   city                 String?
   bio                  String?  @db.VarChar(500)

@@ -1,5 +1,6 @@
 const { supabase, prisma } = require("../../db");
 const { randomBytes } = require("crypto");
+const { normalizePhoneNumber, startPhoneVerification, checkPhoneVerification } = require("../../services/smsService");
 
 async function generateReferralCode() {
   for (let attempt = 0; attempt < 5; attempt += 1) {
@@ -10,17 +11,19 @@ async function generateReferralCode() {
 }
 // Register a new user
 const registerUser = async (req, res) => {
-  const { email, password, name, role, phone, referralCode, smsNotificationsEnabled } = req.body;
+  const { email, password, name, role, phone, phoneVerificationCode, referralCode, smsNotificationsEnabled } = req.body;
 
   // Validate required fields
   if (!phone) {
     return res.status(400).json({ error: "Phone number is required" });
   }
 
-  // Basic phone number validation (at least 10 digits)
-  const phoneRegex = /^\+?[\d\s\-\(\)]{10,}$/;
-  if (!phoneRegex.test(phone)) {
+  const normalizedPhone = normalizePhoneNumber(phone);
+  if (!normalizedPhone) {
     return res.status(400).json({ error: "Please enter a valid phone number" });
+  }
+  if (typeof phoneVerificationCode !== "string" || !/^\d{4,10}$/.test(phoneVerificationCode.trim())) {
+    return res.status(400).json({ error: "Enter the verification code sent to your phone.", code: "PHONE_VERIFICATION_REQUIRED" });
   }
 
   try {
@@ -28,6 +31,20 @@ const registerUser = async (req, res) => {
     if (referralCode?.trim()) {
       referrerProfile = await prisma.userProfile.findUnique({ where: { referralCode: referralCode.trim().toUpperCase() } });
       if (!referrerProfile) return res.status(400).json({ error: "That referral code is invalid." });
+    }
+
+    let phoneIsVerified;
+    try {
+      phoneIsVerified = await checkPhoneVerification(normalizedPhone, phoneVerificationCode);
+    } catch (verificationError) {
+      if (verificationError.code === "PHONE_VERIFICATION_NOT_CONFIGURED") {
+        return res.status(503).json({ error: "Phone verification is not configured yet." });
+      }
+      console.error("Phone verification check failed:", verificationError.code || verificationError.message);
+      return res.status(502).json({ error: "Phone verification is temporarily unavailable. Please try again." });
+    }
+    if (!phoneIsVerified) {
+      return res.status(400).json({ error: "That code is invalid or expired. Request a new code and try again.", code: "PHONE_VERIFICATION_INVALID" });
     }
 
     const origin = req.get("origin");
@@ -52,14 +69,14 @@ const registerUser = async (req, res) => {
     if (data.user) {
       console.log("Saving phone number to user profile:", {
         userId: data.user.id,
-        phone,
       });
       try {
         await prisma.$transaction(async (tx) => {
           await tx.userProfile.create({
             data: {
               userId: data.user.id,
-              phone,
+              phone: normalizedPhone,
+              phoneVerifiedAt: new Date(),
               displayName: typeof name === "string" && name.trim() ? name.trim() : null,
               referralCode: await generateReferralCode(),
               referredById: referrerProfile?.userId || null,
@@ -84,6 +101,30 @@ const registerUser = async (req, res) => {
     res.status(201).json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+};
+
+const sendPhoneVerification = async (req, res) => {
+  const phone = typeof req.body.phone === "string" ? req.body.phone : "";
+  if (!normalizePhoneNumber(phone)) {
+    return res.status(400).json({ error: "Please enter a valid phone number." });
+  }
+
+  try {
+    await startPhoneVerification(phone);
+    return res.status(200).json({ message: "A verification code has been sent." });
+  } catch (error) {
+    if (error.code === "INVALID_PHONE_NUMBER") {
+      return res.status(400).json({ error: "Please enter a valid phone number." });
+    }
+    if (error.code === "PHONE_VERIFICATION_NOT_CONFIGURED") {
+      return res.status(503).json({ error: "Phone verification is not configured yet." });
+    }
+    if ([20429, 60203, 60207].includes(Number(error.code))) {
+      return res.status(429).json({ error: "Too many code requests. Please wait a few minutes before trying again." });
+    }
+    console.error("Phone verification send failed:", error.code || error.message);
+    return res.status(502).json({ error: "Could not send a verification code right now. Please try again." });
   }
 };
 
@@ -280,6 +321,7 @@ const deleteAccount = async (req, res) => {
 
 module.exports = {
   registerUser,
+  sendPhoneVerification,
   loginUser,
   resendEmailVerification,
   verifyEmailSession,
