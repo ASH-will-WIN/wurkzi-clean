@@ -238,17 +238,43 @@ async function updateJob(req, res) {
   }
 }
 
+async function releaseOrRefundApplicationDeposit(application, jobId) {
+  if (!application.depositId) return;
+
+  const { stripeClient } = require("../db");
+  const intent = await stripeClient.paymentIntents.retrieve(application.depositId);
+  if (intent.status === "canceled") return;
+
+  if (intent.status === "succeeded") {
+    const chargeId = typeof intent.latest_charge === "string"
+      ? intent.latest_charge
+      : intent.latest_charge?.id;
+    if (!chargeId) throw new Error("The captured deposit has no associated Stripe charge.");
+
+    const charge = await stripeClient.charges.retrieve(chargeId);
+    const remainingAmount = Math.max(0, charge.amount - charge.amount_refunded);
+    if (remainingAmount > 0) {
+      await stripeClient.refunds.create(
+        { charge: chargeId, amount: remainingAmount },
+        { idempotencyKey: `job-delete-${jobId}-${application.id}` }
+      );
+    }
+    return;
+  }
+
+  // Retrieving first makes retries safe when an earlier delete attempt already
+  // canceled this authorization before failing during database cleanup.
+  await stripeClient.paymentIntents.cancel(intent.id);
+}
+
 async function deleteJob(req, res) {
   try {
     const { id } = req.params;
     const hirerId = req.user.id;
 
-    // 1. Fetch job with applications to check status and ownership
+    // 1. Fetch job to check status and ownership before contacting Stripe.
     const job = await prisma.job.findUnique({
       where: { id },
-      include: {
-        applications: true,
-      },
     });
 
     if (!job) {
@@ -272,49 +298,86 @@ async function deleteJob(req, res) {
       });
     }
 
-    // 4. Refund Workers: Cancel all authorized deposits
-    const refundPromises = job.applications
-      .filter(
-        (app) => app.depositId && [DepositStatus.AUTHORIZED, DepositStatus.PENDING].includes(app.depositStatus)
-      )
-      .map(async (app) => {
-        try {
-          const { stripeClient } = require("../db");
-          await stripeClient.paymentIntents.cancel(app.depositId);
-          console.log(
-            `Refunded deposit ${app.depositId} for worker ${app.workerId}`
-          );
-        } catch (stripeError) {
-          console.error(
-            `Failed to refund deposit ${app.depositId}:`,
-            stripeError.message
-          );
-          // We continue anyway to ensure the job can still be deleted if Stripe fails
-        }
+    // Delete conversations before the job; messages are related to a
+    // conversation, not directly to a job, and cascade with that conversation.
+    // Keep the job row locked until deposits and related rows are resolved so
+    // application and acceptance requests cannot race this deletion.
+    await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "jobs" WHERE "id" = ${id} FOR UPDATE`;
+      const currentJob = await tx.job.findUnique({ where: { id }, select: { hirerId: true, status: true } });
+      if (!currentJob) {
+        const error = new Error("Job not found");
+        error.status = 404;
+        throw error;
+      }
+      if (currentJob.hirerId !== hirerId) {
+        const error = new Error("You can only delete jobs that you created.");
+        error.status = 403;
+        throw error;
+      }
+      if (currentJob.status !== JobStatus.PENDING) {
+        const error = new Error(`Cannot delete a job that is already in ${currentJob.status} status.`);
+        error.status = 409;
+        throw error;
+      }
+
+      await tx.$queryRaw`SELECT "id" FROM "job_applications" WHERE "jobId" = ${id} FOR UPDATE`;
+
+      // Payments are financial records and have a restrictive relation to jobs.
+      // A pending job should not have any; fail clearly instead of deleting
+      // transaction history or returning a foreign-key error.
+      const currentPayment = await tx.payment.findFirst({ where: { jobId: id }, select: { id: true } });
+      const currentIncentive = await tx.jobIncentive.findUnique({ where: { jobId: id }, select: { id: true } });
+      if (currentPayment || currentIncentive) {
+        const error = new Error("This job has payment activity and cannot be deleted until it is resolved.");
+        error.status = 409;
+        throw error;
+      }
+
+      const applications = await tx.jobApplication.findMany({
+        where: { jobId: id },
+        select: { id: true, workerId: true, depositId: true, depositCreditAppliedCents: true, depositStatus: true },
       });
 
-    await Promise.all(refundPromises);
+      // Release pending authorizations or refund a captured deposit. Abort the
+      // deletion if Stripe cannot resolve every deposit. The Stripe helper is
+      // retry-safe if an earlier attempt completed Stripe work but rolled back.
+      const depositResults = await Promise.allSettled(
+        applications.map((application) => releaseOrRefundApplicationDeposit(application, id))
+      );
+      const depositErrors = depositResults.filter((result) => result.status === "rejected");
+      if (depositErrors.length) {
+        depositErrors.forEach((result) => console.error("Failed to resolve application deposit before job deletion:", result.reason?.message));
+        const error = new Error("The job was not deleted because a worker deposit could not be released or refunded. Please retry.");
+        error.status = 502;
+        throw error;
+      }
 
-    // 5. Database Cleanup: Delete related records first
-    // In a real production app, you might want to "Soft Delete" (set status to CANCELLED)
-    // but here we will clean up the database as requested.
-    await prisma.$transaction([
-      prisma.jobApplication.deleteMany({ where: { jobId: id } }),
-      prisma.jobImage.deleteMany({ where: { jobId: id } }),
-      prisma.message.deleteMany({ where: { jobId: id } }),
-      prisma.job.delete({ where: { id } }),
-    ]);
+      for (const application of applications) {
+        if (application.depositCreditAppliedCents > 0 && application.depositStatus !== DepositStatus.REFUNDED) {
+          await tx.userProfile.updateMany({
+            where: { userId: application.workerId },
+            data: { platformCreditCents: { increment: application.depositCreditAppliedCents } },
+          });
+        }
+      }
+
+      await tx.conversation.deleteMany({ where: { jobId: id } });
+      await tx.jobApplication.deleteMany({ where: { jobId: id } });
+      await tx.jobImage.deleteMany({ where: { jobId: id } });
+      await tx.job.delete({ where: { id } });
+    }, { maxWait: 10000, timeout: 60000 });
 
     res.json({
-      message:
-        "Job deleted successfully and all worker deposits were refunded.",
+      message: "Job deleted successfully. Worker deposit authorizations were released and captured deposits refunded.",
     });
   } catch (error) {
     console.error("Job Deletion Error:", error.message);
-    res.status(500).json({
+    const status = error.status || 500;
+    res.status(status).json({
       error: "job_deletion_failed",
-      message: "Failed to delete job.",
-      details: error.message,
+      message: status < 500 || status === 502 ? error.message : "Failed to delete job.",
+      ...(status >= 500 ? { details: error.message } : {}),
     });
   }
 }

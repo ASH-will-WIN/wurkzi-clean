@@ -157,7 +157,7 @@ const Dashboard = () => {
   const handleDeleteJob = async (jobId) => {
     if (
       window.confirm(
-        "Are you sure you want to delete this job? This will automatically refund all worker deposits and cannot be undone."
+        "Are you sure you want to delete this job? Pending $5 deposit holds will be released and captured deposits will be refunded. This cannot be undone."
       )
     ) {
       try {
