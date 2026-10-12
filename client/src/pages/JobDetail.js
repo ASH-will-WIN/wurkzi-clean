@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useParams } from "react-router-dom";
 import { getJobById, getJobImages, deleteJob } from "../api/jobApi";
 import {
@@ -34,6 +34,8 @@ const JobDetail = () => {
   const [loading, setLoading] = useState(true);
   // --- NEW STATE FOR PAYMENT ---
   const [showPaymentForm, setShowPaymentForm] = useState(false);
+  const [preparingDeposit, setPreparingDeposit] = useState(false);
+  const prepareInFlight = useRef(false);
   const [clientSecret, setClientSecret] = useState(null);
   const [pendingApplicationId, setPendingApplicationId] = useState(null);
   const [startingChat, setStartingChat] = useState(false);
@@ -168,11 +170,9 @@ const JobDetail = () => {
     fetchJobAndApps();
   }, [id, user]);
   // --- MODIFIED APPLICATION HANDLER ---
-  const handleApply = async (e) => {
-    e.preventDefault();
-
+  const handleApply = async () => {
+    if (prepareInFlight.current || showPaymentForm || pendingApplicationId) return;
     if (!message || message.trim() === "") {
-      alert("Please enter a reason for your application.");
       return;
     }
 
@@ -182,7 +182,8 @@ const JobDetail = () => {
     }
 
     try {
-      // Step 1: Create the application on your backend
+      prepareInFlight.current = true;
+      setPreparingDeposit(true);
       const applicationData = await createApplication({ jobId: id, message });
       if (applicationData.clientSecret) {
         setPendingApplicationId(applicationData.application.id);
@@ -201,6 +202,9 @@ const JobDetail = () => {
         "Could not start application process."
         }`
       );
+    } finally {
+      prepareInFlight.current = false;
+      setPreparingDeposit(false);
     }
   };
   const onPaymentSuccess = async () => {
@@ -795,7 +799,7 @@ const JobDetail = () => {
                       </div>
                     </div>
 
-                    <form onSubmit={handleApply} className="space-y-6">
+                    <div className="space-y-6">
                       <div>
                         <label className="block text-white font-medium mb-2">
                           Why are you a good fit for this job?
@@ -805,33 +809,23 @@ const JobDetail = () => {
                           readOnly={showPaymentForm}
                           value={message}
                           onChange={(e) => setMessage(e.target.value)}
+                          onBlur={handleApply}
                           className="w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-4 focus:ring-2 focus:ring-amber-500 focus:border-transparent min-h-[120px]"
                           placeholder="Tell the client about your experience and how you can help..."
                         />
                       </div>
 
-                      {!showPaymentForm && (
-                        <button
-                          type="submit"
-                          className="w-full btn btn-primary py-4 text-lg font-bold flex items-center justify-center transition-all bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 border-none shadow-lg shadow-amber-900/20"
-                        >
-                          <svg
-                            className="w-6 h-6 mr-3"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth={2}
-                              d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"
-                            />
-                          </svg>
-                          Continue to Secure $5 Deposit
-                        </button>
+                      {!showPaymentForm && !preparingDeposit && (
+                        <p className="text-center text-xs text-slate-500">
+                          Enter your message, then the secure card fields will appear here. You submit only after paying.
+                        </p>
                       )}
-                    </form>
+                      {preparingDeposit && (
+                        <p className="text-center text-sm text-amber-300" role="status">
+                          Preparing secure card entry…
+                        </p>
+                      )}
+                    </div>
 
                     {showPaymentForm && clientSecret && (
                       <div className="mt-6 border-t border-slate-700 pt-6">

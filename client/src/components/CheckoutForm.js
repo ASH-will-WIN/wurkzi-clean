@@ -8,6 +8,13 @@ const CheckoutForm = ({ clientSecret, onPaymentSuccess, onPaymentError, isFinalP
   const elements = useElements();
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState(null);
+  const [cardComplete, setCardComplete] = useState(false);
+
+  const handleCardChange = (event) => {
+    setCardComplete(event.complete);
+    if (event.error) setError(event.error.message);
+    else setError(null);
+  };
 
   const handleSubmit = async (event) => {
     event.preventDefault();
@@ -16,6 +23,7 @@ const CheckoutForm = ({ clientSecret, onPaymentSuccess, onPaymentError, isFinalP
 
     if (!stripe || !elements) {
       // Stripe.js has not yet loaded.
+      setProcessing(false);
       return;
     }
 
@@ -83,11 +91,11 @@ const CheckoutForm = ({ clientSecret, onPaymentSuccess, onPaymentError, isFinalP
         </div>
 
         <div className={commonStyles.cardContainer}>
-          <CardElement options={cardElementOptions} />
+          <CardElement options={cardElementOptions} onChange={handleCardChange} />
         </div>
 
         <button
-          disabled={!stripe || processing}
+          disabled={!stripe || processing || !cardComplete}
           type="submit"
           className={`${commonStyles.buttonBase} bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-emerald-500/20`}
         >
@@ -123,11 +131,15 @@ const CheckoutForm = ({ clientSecret, onPaymentSuccess, onPaymentError, isFinalP
       </div>
 
       <div className={commonStyles.cardContainer}>
-        <CardElement options={cardElementOptions} />
+        <CardElement options={cardElementOptions} onChange={handleCardChange} />
       </div>
 
+      <p className="text-xs text-slate-400">
+        Complete your card number, expiration date, and security code to enable submission.
+      </p>
+
       <button
-        disabled={!stripe || processing}
+        disabled={!stripe || processing || !cardComplete}
         type="submit"
         className={`${commonStyles.buttonBase} bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white shadow-amber-500/20`}
       >
