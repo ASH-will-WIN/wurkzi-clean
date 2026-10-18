@@ -323,6 +323,7 @@ enum JobStatus {
 }
 
 enum ApplicationStatus {
+  PENDING_PAYMENT
   APPLIED
   ACCEPTED
   REJECTED

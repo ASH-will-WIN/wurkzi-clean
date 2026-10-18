@@ -48,6 +48,22 @@ const Privacy = () => {
                         <li>Job history and communications on the platform</li>
                     </ul>
 
+                    <h3 className="text-lg font-semibold mt-4 mb-2 text-white">
+                        SMS and Notification Information
+                    </h3>
+                    <p className="text-slate-400 mb-4">
+                        If you provide your phone number and opt in to SMS alerts, Wurkzi
+                        collects your phone number, SMS consent status, and related consent
+                        records. Wurkzi uses this information to send transactional alerts
+                        about applications, job updates, and messages. You can opt out at any
+                        time by replying STOP. Message and data rates may apply. You may
+                        reply START to resume SMS alerts.
+                    </p>
+                    <p className="text-slate-400 mb-4">
+                        We do not sell or share your SMS opt-in data or personal information
+                        with third parties for marketing purposes.
+                    </p>
+
                     <hr className="my-6 border-slate-700" />
 
                     <h2 className="text-xl font-semibold mt-6 mb-2 text-wurkzi-400">

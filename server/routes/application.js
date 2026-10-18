@@ -6,6 +6,8 @@ const authMiddleware = require("../middleware/auth");
 // Routes
 router.post("/", authMiddleware, authMiddleware.requireVerifiedEmail, applicationController.createApplication);
 router.get("/", authMiddleware, applicationController.getApplications);
+router.get("/deposit-quote/:jobId", authMiddleware, authMiddleware.requireVerifiedEmail, applicationController.getApplicationDepositQuote);
+router.post("/:id/resume-deposit", authMiddleware, authMiddleware.requireVerifiedEmail, applicationController.resumeApplicationDeposit);
 router.get(
   "/jobs/:jobId",
   authMiddleware,

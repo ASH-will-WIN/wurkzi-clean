@@ -8,6 +8,7 @@ import {
   rejectApplication,
   confirmApplicationDeposit,
   resumeApplicationDeposit,
+  getApplicationDepositQuote,
 } from "../api/applicationApi";
 import { useAuth } from "../context/AuthContext";
 import { useNavigate } from "react-router-dom";
@@ -32,12 +33,14 @@ const JobDetail = () => {
   const [imagesLoading, setImagesLoading] = useState(false);
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(true);
-  // --- NEW STATE FOR PAYMENT ---
+  const [depositQuote, setDepositQuote] = useState(null);
   const [showPaymentForm, setShowPaymentForm] = useState(false);
   const [preparingDeposit, setPreparingDeposit] = useState(false);
   const prepareInFlight = useRef(false);
   const [clientSecret, setClientSecret] = useState(null);
   const [pendingApplicationId, setPendingApplicationId] = useState(null);
+  const [applicationError, setApplicationError] = useState("");
+  const [applicationSuccess, setApplicationSuccess] = useState("");
   const [startingChat, setStartingChat] = useState(false);
   const [chatError, setChatError] = useState("");
   const [reviews, setReviews] = useState([]);
@@ -81,6 +84,7 @@ const JobDetail = () => {
     try {
       setLoading(true);
       setImagesLoading(true);
+      setApplicationError("");
 
       // Fetch job data first to check hirer status
       const jobData = await getJobById(id);
@@ -96,20 +100,33 @@ const JobDetail = () => {
         setPendingApplicationId(pendingApplication.id);
         try {
           const resume = await resumeApplicationDeposit(pendingApplication.id);
-          if (resume.clientSecret) {
-            setClientSecret(resume.clientSecret);
-            setShowPaymentForm(true);
-          } else if (resume.submitted) {
-            setShowPaymentForm(false);
+          setDepositQuote(resume);
+          setClientSecret(resume.clientSecret || null);
+          setShowPaymentForm(Boolean(resume.amountDueCents > 0));
+          if (resume.submitted) {
             setPendingApplicationId(null);
-            setClientSecret(null);
-            fetchJobAndApps();
+            setApplicationSuccess("Your application has been submitted.");
+            setJob(await getJobById(id));
           }
         } catch (resumeError) {
-          setPendingApplicationId(null);
-          setClientSecret(null);
-          setShowPaymentForm(false);
+          setApplicationError(resumeError.response?.data?.message || "We couldn't resume your payment. Please refresh and try again.");
         }
+      } else if (user?.id !== jobData.hirerId && jobData.status === "PENDING") {
+        try {
+          const quote = await getApplicationDepositQuote(id);
+          setDepositQuote(quote);
+          setShowPaymentForm(quote.amountDueCents > 0);
+          setClientSecret(null);
+          setPendingApplicationId(null);
+          setApplicationError("");
+          setApplicationSuccess("");
+        } catch (quoteError) {
+          setDepositQuote(null);
+          setApplicationError(quoteError.response?.data?.message || "Couldn't load the deposit amount. Try again.");
+        }
+      } else {
+        setDepositQuote(null);
+        setShowPaymentForm(false);
       }
       if (jobData.status === "COMPLETED") {
         setReviews(await getReviewsForJob(id));
@@ -169,59 +186,86 @@ const JobDetail = () => {
   useEffect(() => {
     fetchJobAndApps();
   }, [id, user]);
-  // --- MODIFIED APPLICATION HANDLER ---
-  const handleApply = async () => {
-    if (prepareInFlight.current || showPaymentForm || pendingApplicationId) return;
-    if (!message || message.trim() === "") {
-      return;
-    }
+  const isApplicationMessageValid = message.trim().length > 0 && !/\d/.test(message);
 
-    if (/\d/.test(message)) {
-      alert("Application messages cannot contain numbers. Please describe your experience without using digits.");
-      return;
-    }
+  const prepareApplicationPayment = async () => {
+    if (prepareInFlight.current) throw new Error("Your application is already being prepared.");
+    if (!message.trim()) throw new Error("Tell the client why you are a good fit before applying.");
+    if (/\d/.test(message)) throw new Error("Application messages cannot contain numbers. Please describe your experience without digits.");
 
+    prepareInFlight.current = true;
+    setPreparingDeposit(true);
+    setApplicationError("");
+    setApplicationSuccess("");
     try {
-      prepareInFlight.current = true;
-      setPreparingDeposit(true);
-      const applicationData = await createApplication({ jobId: id, message });
-      if (applicationData.clientSecret) {
-        setPendingApplicationId(applicationData.application.id);
-        setClientSecret(applicationData.clientSecret);
+      const result = pendingApplicationId
+        ? await resumeApplicationDeposit(pendingApplicationId)
+        : await createApplication({ jobId: id, message });
+      const quotedAmountDueCents = depositQuote?.amountDueCents;
+      setDepositQuote(result);
+      if (result.application?.id) setPendingApplicationId(result.application.id);
+      if (result.clientSecret) {
+        setClientSecret(result.clientSecret);
         setShowPaymentForm(true);
-      } else {
-        alert(applicationData.submitted
-          ? "Your application is submitted."
-          : "Application submitted using your $5 referral credit.");
-        setMessage("");
-        fetchJobAndApps();
+        return {
+          clientSecret: result.clientSecret,
+          applicationId: result.application?.id,
+          amountChanged: quotedAmountDueCents != null && quotedAmountDueCents !== result.amountDueCents,
+        };
       }
+      if (result.submitted) return { submitted: true, applicationId: result.application?.id };
+      throw new Error("Payment details are not ready yet. Please try again.");
     } catch (error) {
-      alert(
-        `Error: ${error.response?.data?.message ||
-        "Could not start application process."
-        }`
-      );
+      const messageText = error.response?.data?.message || error.message || "Could not prepare your application payment.";
+      setApplicationError(messageText);
+      if (error.response?.status === 409 && messageText.toLowerCase().includes("credit")) {
+        try {
+          const refreshedQuote = await getApplicationDepositQuote(id);
+          setDepositQuote(refreshedQuote);
+          setShowPaymentForm(refreshedQuote.amountDueCents > 0);
+          setClientSecret(null);
+          setPendingApplicationId(null);
+        } catch (quoteError) {
+          console.error("Could not refresh application deposit quote:", quoteError);
+        }
+      }
+      throw new Error(messageText);
     } finally {
       prepareInFlight.current = false;
       setPreparingDeposit(false);
     }
   };
-  const onPaymentSuccess = async () => {
+
+  const onPaymentSuccess = async (applicationId = pendingApplicationId) => {
     try {
-      await confirmApplicationDeposit(pendingApplicationId);
-      alert("Application submitted successfully! Check your dashboard for next steps.");
+      if (applicationId) await confirmApplicationDeposit(applicationId);
       setShowPaymentForm(false);
       setPendingApplicationId(null);
       setClientSecret(null);
+      setDepositQuote(null);
       setMessage("");
+      setApplicationError("");
+      setApplicationSuccess("Application submitted successfully. Check your dashboard for next steps.");
       fetchJobAndApps();
     } catch (error) {
-      setChatError(error.response?.data?.message || "We couldn't confirm the deposit yet. Please refresh your application status.");
+      const messageText = error.response?.data?.message || "We couldn't confirm the deposit yet. Your payment is saved; refresh to check its status.";
+      setApplicationError(messageText);
+      throw new Error(messageText);
     }
   };
+
+  const handleCreditApplication = async () => {
+    try {
+      const prepared = await prepareApplicationPayment();
+      if (prepared.submitted) await onPaymentSuccess(prepared.applicationId);
+      else if (prepared.clientSecret) setApplicationError("Your credit balance changed. Enter the remaining card payment below to finish applying.");
+    } catch (error) {
+      setApplicationError(error.message || "Could not submit your application.");
+    }
+  };
+
   const onPaymentError = (errorMsg) => {
-    alert(`Payment failed: ${errorMsg}`);
+    setApplicationError(errorMsg);
   };
   const handleAccept = async (appId) => {
     try {
@@ -772,11 +816,10 @@ const JobDetail = () => {
                         </div>
                         <div className="flex-1">
                           <h4 className="text-lg font-bold text-amber-300 mb-2">
-                            💰 $5 Refundable Deposit Required
+                            💰 $5 Refundable Application Deposit
                           </h4>
                           <p className="text-amber-200/80 mb-3">
-                            To apply for this job, you must pay a <span className="font-bold text-white">$5 deposit</span> upfront.
-                            Your application will only be submitted after payment is complete.
+                            Platform credit is applied first. Any remaining amount is paid by card, and your application is submitted only after payment is confirmed.
                           </p>
                           <div className="bg-slate-900/50 rounded-lg p-3">
                             <p className="text-sm text-slate-300 font-medium mb-2">What happens to your deposit:</p>
@@ -806,40 +849,66 @@ const JobDetail = () => {
                         </label>
                         <textarea
                           required
-                          readOnly={showPaymentForm}
+                          readOnly={Boolean(pendingApplicationId)}
                           value={message}
-                          onChange={(e) => setMessage(e.target.value)}
-                          onBlur={handleApply}
+                          onChange={(e) => {
+                            setMessage(e.target.value);
+                            setApplicationError("");
+                          }}
                           className="w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-4 focus:ring-2 focus:ring-amber-500 focus:border-transparent min-h-[120px]"
                           placeholder="Tell the client about your experience and how you can help..."
                         />
+                        {message && /\d/.test(message) && <p className="mt-2 text-sm text-red-300">Please describe your experience without using numbers.</p>}
                       </div>
 
-                      {!showPaymentForm && !preparingDeposit && (
-                        <p className="text-center text-xs text-slate-500">
-                          Enter your message, then the secure card fields will appear here. You submit only after paying.
-                        </p>
+                      {depositQuote && (
+                        <div className="rounded-xl border border-slate-700 bg-slate-800/70 p-4 text-sm space-y-2">
+                          <div className="flex justify-between text-slate-300"><span>Deposit</span><span>${(depositQuote.depositAmountCents / 100).toFixed(2)}</span></div>
+                          <div className="flex justify-between text-emerald-300"><span>Platform credit</span><span>−${(depositQuote.creditAppliedCents / 100).toFixed(2)}</span></div>
+                          <div className="flex justify-between border-t border-slate-700 pt-2 font-semibold text-white"><span>{depositQuote.amountDueCents > 0 ? "Card payment" : "Due now"}</span><span>${(depositQuote.amountDueCents / 100).toFixed(2)}</span></div>
+                        </div>
                       )}
-                      {preparingDeposit && (
-                        <p className="text-center text-sm text-amber-300" role="status">
-                          Preparing secure card entry…
-                        </p>
+                      {!depositQuote && (
+                        <div className="rounded-xl border border-slate-700 bg-slate-800/70 p-4 text-sm text-slate-400">
+                          <p>{applicationError || "Loading your deposit amount…"}</p>
+                          {applicationError && <button type="button" onClick={fetchJobAndApps} className="mt-2 text-amber-300 underline">Try again</button>}
+                        </div>
                       )}
                     </div>
 
-                    {showPaymentForm && clientSecret && (
+                    {showPaymentForm && depositQuote?.amountDueCents > 0 && (
                       <div className="mt-6 border-t border-slate-700 pt-6">
-                        <h4 className="text-lg font-semibold text-white mb-3">Enter payment details to submit</h4>
-                        <p className="text-slate-400 text-sm mb-4">Your application message is ready. Finish payment to send it to the hirer.</p>
-                        <Elements stripe={stripePromise} options={{ clientSecret }}>
+                        <h4 className="text-lg font-semibold text-white mb-3">Card details</h4>
+                        <p className="text-slate-400 text-sm mb-4">Your card will be charged ${(depositQuote.amountDueCents / 100).toFixed(2)} for the refundable deposit.</p>
+                        <Elements stripe={stripePromise}>
                           <CheckoutForm
                             clientSecret={clientSecret}
+                            applicationId={pendingApplicationId}
+                            onPreparePayment={prepareApplicationPayment}
                             onPaymentSuccess={onPaymentSuccess}
                             onPaymentError={onPaymentError}
+                            amount={depositQuote.amountDueCents / 100}
+                            canSubmit={isApplicationMessageValid && !preparingDeposit}
+                            buttonLabel={`Pay $${(depositQuote.amountDueCents / 100).toFixed(2)} & Submit Application`}
                           />
                         </Elements>
                       </div>
                     )}
+
+                    {depositQuote?.amountDueCents === 0 && (
+                      <button
+                        type="button"
+                        onClick={handleCreditApplication}
+                        disabled={!isApplicationMessageValid || preparingDeposit}
+                        className="mt-6 w-full py-4 px-6 rounded-xl font-bold text-lg bg-gradient-to-r from-emerald-600 to-teal-600 text-white disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {preparingDeposit ? "Submitting…" : "Apply using platform credit"}
+                      </button>
+                    )}
+
+                    {applicationError && <p className="mt-4 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300" role="alert">{applicationError}</p>}
+                    {applicationSuccess && <p className="mt-4 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-300" role="status">{applicationSuccess}</p>}
+                    {preparingDeposit && <p className="mt-3 text-center text-sm text-amber-300" role="status">Preparing your secure payment…</p>}
                   </>
                 )}
               </div>

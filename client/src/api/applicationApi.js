@@ -2,7 +2,12 @@ import { apiClient } from "./apiClient";
 
 export const createApplication = async (appData) => {
   const response = await apiClient.post("/applications", appData);
-  return response.data; // This now returns { application, clientSecret }
+  return response.data;
+};
+
+export const getApplicationDepositQuote = async (jobId) => {
+  const response = await apiClient.get(`/applications/deposit-quote/${jobId}`);
+  return response.data;
 };
 
 export const confirmApplicationDeposit = async (applicationId) => {

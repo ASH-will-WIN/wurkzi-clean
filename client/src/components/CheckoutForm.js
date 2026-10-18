@@ -3,7 +3,17 @@
 import React, { useState } from "react";
 import { CardElement, useStripe, useElements } from "@stripe/react-stripe-js";
 
-const CheckoutForm = ({ clientSecret, onPaymentSuccess, onPaymentError, isFinalPayment = false, amount = 5.00 }) => {
+const CheckoutForm = ({
+  clientSecret,
+  applicationId,
+  onPreparePayment,
+  onPaymentSuccess,
+  onPaymentError,
+  isFinalPayment = false,
+  amount = 5.00,
+  canSubmit = true,
+  buttonLabel,
+}) => {
   const stripe = useStripe();
   const elements = useElements();
   const [processing, setProcessing] = useState(false);
@@ -18,6 +28,7 @@ const CheckoutForm = ({ clientSecret, onPaymentSuccess, onPaymentError, isFinalP
 
   const handleSubmit = async (event) => {
     event.preventDefault();
+    if (!cardComplete || !canSubmit) return;
     setProcessing(true);
     setError(null);
 
@@ -27,25 +38,38 @@ const CheckoutForm = ({ clientSecret, onPaymentSuccess, onPaymentError, isFinalP
       return;
     }
 
-    const { error, paymentIntent } = await stripe.confirmCardPayment(
-      clientSecret,
-      {
-        payment_method: {
-          card: elements.getElement(CardElement),
-        },
+    try {
+      let activeClientSecret = clientSecret;
+      let activeApplicationId = applicationId;
+      if (onPreparePayment) {
+        const prepared = await onPreparePayment();
+        if (prepared?.submitted) {
+          await onPaymentSuccess(prepared.applicationId);
+          return;
+        }
+        if (prepared?.amountChanged) {
+          throw new Error("Your credit balance changed. Review the updated amount and submit again.");
+        }
+        activeClientSecret = prepared?.clientSecret;
+        activeApplicationId = prepared?.applicationId;
       }
-    );
+      if (!activeClientSecret) throw new Error("Payment could not be prepared. Please try again.");
 
-    if (error) {
-      setError(error.message);
-      onPaymentError(error.message);
-      setProcessing(false);
-    } else if (
-      paymentIntent.status === "succeeded" ||
-      paymentIntent.status === "requires_capture"
-    ) {
-      // The 'requires_capture' status is what we expect for the deposit.
-      onPaymentSuccess();
+      const { error, paymentIntent } = await stripe.confirmCardPayment(
+        activeClientSecret,
+        { payment_method: { card: elements.getElement(CardElement) } }
+      );
+
+      if (error) throw error;
+      if (paymentIntent?.status === "succeeded" || paymentIntent?.status === "requires_capture") {
+        await onPaymentSuccess(activeApplicationId);
+      } else {
+        throw new Error("Your payment is still processing. Please try again shortly.");
+      }
+    } catch (submitError) {
+      setError(submitError.message || "Payment failed. Please try again.");
+      onPaymentError?.(submitError.message || "Payment failed. Please try again.");
+    } finally {
       setProcessing(false);
     }
   };
@@ -95,7 +119,7 @@ const CheckoutForm = ({ clientSecret, onPaymentSuccess, onPaymentError, isFinalP
         </div>
 
         <button
-          disabled={!stripe || processing || !cardComplete}
+          disabled={!stripe || processing || !cardComplete || !canSubmit}
           type="submit"
           className={`${commonStyles.buttonBase} bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-emerald-500/20`}
         >
@@ -127,7 +151,7 @@ const CheckoutForm = ({ clientSecret, onPaymentSuccess, onPaymentError, isFinalP
     <form onSubmit={handleSubmit} className="space-y-6">
       <div className="flex items-center space-x-2 mb-4">
         <span className="text-2xl">🛡️</span>
-        <h4 className="text-xl font-bold text-white">Secure $5.00 Deposit</h4>
+        <h4 className="text-xl font-bold text-white">Secure ${Number(amount).toFixed(2)} Payment</h4>
       </div>
 
       <div className={commonStyles.cardContainer}>
@@ -139,7 +163,7 @@ const CheckoutForm = ({ clientSecret, onPaymentSuccess, onPaymentError, isFinalP
       </p>
 
       <button
-        disabled={!stripe || processing || !cardComplete}
+        disabled={!stripe || processing || !cardComplete || !canSubmit}
         type="submit"
         className={`${commonStyles.buttonBase} bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white shadow-amber-500/20`}
       >
@@ -153,7 +177,7 @@ const CheckoutForm = ({ clientSecret, onPaymentSuccess, onPaymentError, isFinalP
             <svg className={commonStyles.icon} fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
             </svg>
-            <span>Pay $5 & Submit Application</span>
+            <span>{buttonLabel || `Pay $${Number(amount).toFixed(2)} & Submit Application`}</span>
           </>
         )}
       </button>
