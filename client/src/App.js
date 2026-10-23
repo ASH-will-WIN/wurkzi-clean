@@ -1,5 +1,5 @@
 import React, { useEffect } from "react";
-import { Routes, Route, useNavigate, useLocation } from "react-router-dom";
+import { Routes, Route, Navigate, useNavigate, useLocation } from "react-router-dom";
 import Navbar from "./components/Navbar";
 import ProtectedRoute from "./components/ProtectedRoute";
 import Login from "./pages/Login";
@@ -24,6 +24,7 @@ import ForgotPassword from "./pages/ForgotPassword";
 import ResetPassword from "./pages/ResetPassword";
 import VerifyEmail from "./pages/VerifyEmail";
 import Referrals from "./pages/Referrals";
+import { referralsVisible } from "./config/features";
 import Leaderboard from "./pages/Leaderboard";
 import Staging from "./pages/Staging";
 import Profile from "./pages/Profile";
@@ -130,11 +131,11 @@ function App() {
           />
           <Route
             path="/referrals"
-            element={
+            element={referralsVisible ? (
               <ProtectedRoute>
                 <Referrals />
               </ProtectedRoute>
-            }
+            ) : <Navigate to="/" replace />}
           />
           <Route
             path="/leaderboard"

@@ -5,6 +5,7 @@ import logo from "../assets/logo.png";
 import UnreadMessagesBadge from "./UnreadMessagesBadge";
 import { connectMessageRealtime, disconnectMessageRealtime } from "../api/messageRealtime";
 import { getNotifications, getNotificationPreferences, markAllNotificationsRead, markNotificationRead, updateNotificationPreferences } from "../api/notificationApi";
+import { referralsVisible } from "../config/features";
 
 const Navbar = () => {
   const { isAuthenticated, logout, user, profile, token } = useAuth();
@@ -209,12 +210,12 @@ const Navbar = () => {
                   </Link>
                 )}
 
-                <Link
+                {referralsVisible && <Link
                   to="/referrals"
                   className={`text-sm font-medium transition-colors duration-200 hover:text-white ${isActive('/referrals') ? 'text-white' : 'text-slate-400'}`}
                 >
                   Refer & Earn
-                </Link>
+                </Link>}
 
                 <Link
                   to="/leaderboard"
@@ -401,13 +402,13 @@ const Navbar = () => {
                     Post Job
                   </Link>
                 )}
-                <Link
+                {referralsVisible && <Link
                   to="/referrals"
                   className={`block px-3 py-2 rounded-md text-base font-medium ${isActive('/referrals') ? 'text-white bg-wurkzi-600' : 'text-slate-400 hover:text-white hover:bg-slate-800'}`}
                   onClick={() => setIsMenuOpen(false)}
                 >
                   Refer & Earn
-                </Link>
+                </Link>}
                 <Link
                   to="/leaderboard"
                   className={`block px-3 py-2 rounded-md text-base font-medium ${isActive('/leaderboard') ? 'text-white bg-wurkzi-600' : 'text-slate-400 hover:text-white hover:bg-slate-800'}`}

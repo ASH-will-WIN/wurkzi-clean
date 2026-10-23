@@ -29,15 +29,25 @@ const Register = () => {
       return false;
     }
 
+    if (!smsNotificationsEnabled) {
+      setError("You must opt in to text message notifications to create an account.");
+      return false;
+    }
+
     // Validate phone number
     if (!phone) {
       setError("Phone number is required.");
       return false;
     }
 
-    // Basic phone number validation (at least 10 digits)
-    const phoneRegex = /^\+?[\d\s\-\(\)]{10,}$/;
-    if (!phoneRegex.test(phone)) {
+    // Accept US numbers with or without +1, and international numbers with +country code.
+    const trimmedPhone = phone.trim();
+    const phoneDigits = trimmedPhone.replace(/\D/g, "");
+    const hasOnlyPhoneCharacters = /^\+?[\d\s().-]+$/.test(trimmedPhone);
+    const validPhone = trimmedPhone.startsWith("+")
+      ? /^[1-9]\d{7,14}$/.test(phoneDigits)
+      : phoneDigits.length === 10 || (phoneDigits.length === 11 && phoneDigits.startsWith("1"));
+    if (!hasOnlyPhoneCharacters || !validPhone) {
       setError("Please enter a valid phone number.");
       return false;
     }
@@ -147,10 +157,11 @@ const Register = () => {
           </div>
 
           <div className="text-left">
-            <label className="block text-sm font-medium text-slate-300 mb-1">
+            <label htmlFor="registration-phone" className="block text-sm font-medium text-slate-300 mb-1">
               Phone Number *
             </label>
             <input
+              id="registration-phone"
               type="tel"
               placeholder="+1 (555) 000-0000"
               value={phone}
@@ -159,6 +170,7 @@ const Register = () => {
               className="w-full px-4 py-3 bg-slate-950/50 border border-slate-700 rounded-xl focus:ring-2 focus:ring-wurkzi-500 focus:border-transparent outline-none transition-all text-white placeholder-slate-500"
               required
             />
+            <p className="mt-1 text-xs text-slate-500">Required. We’ll text you a one-time code to verify this number.</p>
           </div>
 
           {phoneCodeSent && (
@@ -235,16 +247,17 @@ const Register = () => {
               type="checkbox"
               checked={smsNotificationsEnabled}
               onChange={(e) => setSmsNotificationsEnabled(e.target.checked)}
+              required
               className="mt-1 h-4 w-4 rounded border-slate-600 bg-slate-900 text-wurkzi-600 focus:ring-wurkzi-500 focus:ring-offset-slate-900"
             />
             <label htmlFor="sms-opt-in" className="ml-3 text-sm text-slate-400">
-              Text me important job updates and new messages. Message frequency varies; message and data rates may apply. Reply STOP to opt out.
+              Required: I agree to receive important job updates and new message notifications by text. Message frequency varies; message and data rates may apply. Reply STOP to opt out.
             </label>
           </div>
 
           <button
             type="submit"
-            disabled={!agreedToTerms || sendingPhoneCode || creatingAccount}
+            disabled={!agreedToTerms || !smsNotificationsEnabled || sendingPhoneCode || creatingAccount}
             className="w-full py-3.5 mt-2 bg-gradient-to-r from-wurkzi-600 to-purple-600 hover:from-wurkzi-500 hover:to-purple-500 text-white font-bold rounded-xl shadow-lg shadow-purple-900/20 transition-all duration-300 hover:-translate-y-0.5 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0"
           >
             {sendingPhoneCode ? "Sending code…" : creatingAccount ? "Creating account…" : phoneCodeSent ? "Verify phone & create account" : "Text me a verification code"}
