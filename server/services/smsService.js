@@ -46,6 +46,10 @@ function getVerifyService() {
   return client.verify.v2.services(serviceSid);
 }
 
+function isPhoneVerificationConfigured() {
+  return Boolean(client && process.env.TWILIO_VERIFY_SERVICE_SID);
+}
+
 async function startPhoneVerification(phone) {
   const destination = normalizePhoneNumber(phone);
   if (!destination) {
@@ -116,4 +120,5 @@ module.exports = {
   normalizePhoneNumber,
   startPhoneVerification,
   checkPhoneVerification,
+  isPhoneVerificationConfigured,
 };

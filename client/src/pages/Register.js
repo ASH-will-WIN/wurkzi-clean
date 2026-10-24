@@ -9,6 +9,7 @@ const Register = () => {
   const [phone, setPhone] = useState("");
   const [phoneVerificationCode, setPhoneVerificationCode] = useState("");
   const [phoneCodeSent, setPhoneCodeSent] = useState(false);
+  const [phoneVerificationSkipped, setPhoneVerificationSkipped] = useState(false);
   const [sendingPhoneCode, setSendingPhoneCode] = useState(false);
   const [creatingAccount, setCreatingAccount] = useState(false);
   const [role] = useState("MEMBER"); // Default role (hidden from user)
@@ -58,8 +59,9 @@ const Register = () => {
     if (!validatePhoneAndTerms()) return;
     setSendingPhoneCode(true);
     try {
-      await requestPhoneVerification(phone);
+      const result = await requestPhoneVerification(phone);
       setPhoneCodeSent(true);
+      setPhoneVerificationSkipped(Boolean(result?.verificationSkipped));
       setPhoneVerificationCode("");
       setError("");
     } catch (err) {
@@ -76,14 +78,14 @@ const Register = () => {
       await handleSendPhoneCode();
       return;
     }
-    if (!/^\d{4,10}$/.test(phoneVerificationCode.trim())) {
+    if (!phoneVerificationSkipped && !/^\d{4,10}$/.test(phoneVerificationCode.trim())) {
       setError("Enter the verification code sent to your phone.");
       return;
     }
 
     setCreatingAccount(true);
     try {
-      const result = await register(name, email, password, role, phone, phoneVerificationCode.trim(), referralCode, smsNotificationsEnabled);
+      const result = await register(name, email, password, role, phone, phoneVerificationSkipped ? "" : phoneVerificationCode.trim(), referralCode, smsNotificationsEnabled);
       if (result?.requiresEmailVerification) {
         navigate("/verify-email", { state: { email: result.email || email, sent: true } });
       } else {
@@ -104,6 +106,7 @@ const Register = () => {
   const handlePhoneChange = (value) => {
     setPhone(value);
     setPhoneCodeSent(false);
+    setPhoneVerificationSkipped(false);
     setPhoneVerificationCode("");
     setError("");
   };
@@ -170,10 +173,10 @@ const Register = () => {
               className="w-full px-4 py-3 bg-slate-950/50 border border-slate-700 rounded-xl focus:ring-2 focus:ring-wurkzi-500 focus:border-transparent outline-none transition-all text-white placeholder-slate-500"
               required
             />
-            <p className="mt-1 text-xs text-slate-500">Required. We’ll text you a one-time code to verify this number.</p>
+            <p className="mt-1 text-xs text-slate-500">Required. Enter a number where you can receive Wurkzi texts.</p>
           </div>
 
-          {phoneCodeSent && (
+          {phoneCodeSent && !phoneVerificationSkipped && (
             <div className="text-left space-y-2">
               <label htmlFor="phone-verification-code" className="block text-sm font-medium text-slate-300">
                 Text message code
@@ -198,6 +201,12 @@ const Register = () => {
                 </button>
               </div>
             </div>
+          )}
+
+          {phoneVerificationSkipped && (
+            <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-left text-sm text-amber-200" role="status">
+              Phone verification is temporarily unavailable, so you can continue without a code.
+            </p>
           )}
 
           <div className="text-left">
@@ -260,7 +269,7 @@ const Register = () => {
             disabled={!agreedToTerms || !smsNotificationsEnabled || sendingPhoneCode || creatingAccount}
             className="w-full py-3.5 mt-2 bg-gradient-to-r from-wurkzi-600 to-purple-600 hover:from-wurkzi-500 hover:to-purple-500 text-white font-bold rounded-xl shadow-lg shadow-purple-900/20 transition-all duration-300 hover:-translate-y-0.5 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0"
           >
-            {sendingPhoneCode ? "Sending code…" : creatingAccount ? "Creating account…" : phoneCodeSent ? "Verify phone & create account" : "Text me a verification code"}
+            {sendingPhoneCode ? "Sending code…" : creatingAccount ? "Creating account…" : phoneVerificationSkipped ? "Create account" : phoneCodeSent ? "Verify phone & create account" : "Text me a verification code"}
           </button>
 
           {error && (

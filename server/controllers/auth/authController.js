@@ -1,6 +1,6 @@
 const { supabase, prisma } = require("../../db");
 const { randomBytes } = require("crypto");
-const { normalizePhoneNumber, startPhoneVerification, checkPhoneVerification } = require("../../services/smsService");
+const { normalizePhoneNumber, startPhoneVerification, checkPhoneVerification, isPhoneVerificationConfigured } = require("../../services/smsService");
 
 async function generateReferralCode() {
   for (let attempt = 0; attempt < 5; attempt += 1) {
@@ -25,7 +25,8 @@ const registerUser = async (req, res) => {
   if (!normalizedPhone) {
     return res.status(400).json({ error: "Please enter a valid phone number" });
   }
-  if (typeof phoneVerificationCode !== "string" || !/^\d{4,10}$/.test(phoneVerificationCode.trim())) {
+  const hasPhoneVerificationCode = typeof phoneVerificationCode === "string" && /^\d{4,10}$/.test(phoneVerificationCode.trim());
+  if (isPhoneVerificationConfigured() && !hasPhoneVerificationCode) {
     return res.status(400).json({ error: "Enter the verification code sent to your phone.", code: "PHONE_VERIFICATION_REQUIRED" });
   }
 
@@ -36,17 +37,19 @@ const registerUser = async (req, res) => {
       if (!referrerProfile) return res.status(400).json({ error: "That referral code is invalid." });
     }
 
-    let phoneIsVerified;
-    try {
-      phoneIsVerified = await checkPhoneVerification(normalizedPhone, phoneVerificationCode);
-    } catch (verificationError) {
-      if (verificationError.code === "PHONE_VERIFICATION_NOT_CONFIGURED") {
-        return res.status(503).json({ error: "Phone verification is not configured yet." });
+    let phoneIsVerified = !isPhoneVerificationConfigured();
+    if (hasPhoneVerificationCode) {
+      try {
+        phoneIsVerified = await checkPhoneVerification(normalizedPhone, phoneVerificationCode);
+      } catch (verificationError) {
+        if (verificationError.code !== "PHONE_VERIFICATION_NOT_CONFIGURED") {
+          console.error("Phone verification check failed:", verificationError.code || verificationError.message);
+          return res.status(502).json({ error: "Phone verification is temporarily unavailable. Please try again." });
+        }
+        phoneIsVerified = true;
       }
-      console.error("Phone verification check failed:", verificationError.code || verificationError.message);
-      return res.status(502).json({ error: "Phone verification is temporarily unavailable. Please try again." });
     }
-    if (!phoneIsVerified) {
+    if (hasPhoneVerificationCode && !phoneIsVerified) {
       return res.status(400).json({ error: "That code is invalid or expired. Request a new code and try again.", code: "PHONE_VERIFICATION_INVALID" });
     }
 
@@ -122,7 +125,10 @@ const sendPhoneVerification = async (req, res) => {
       return res.status(400).json({ error: "Please enter a valid phone number." });
     }
     if (error.code === "PHONE_VERIFICATION_NOT_CONFIGURED") {
-      return res.status(503).json({ error: "Phone verification is not configured yet." });
+      return res.status(200).json({
+        verificationSkipped: true,
+        message: "Phone verification is temporarily unavailable. You can continue creating your account.",
+      });
     }
     if ([20429, 60203, 60207].includes(Number(error.code))) {
       return res.status(429).json({ error: "Too many code requests. Please wait a few minutes before trying again." });
