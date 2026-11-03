@@ -17,8 +17,8 @@ const registerUser = async (req, res) => {
   if (!phone) {
     return res.status(400).json({ error: "Phone number is required" });
   }
-  if (smsNotificationsEnabled !== true) {
-    return res.status(400).json({ error: "You must opt in to text message notifications to create an account." });
+  if (smsNotificationsEnabled !== undefined && typeof smsNotificationsEnabled !== "boolean") {
+    return res.status(400).json({ error: "SMS notification preference must be true or false." });
   }
 
   const normalizedPhone = normalizePhoneNumber(phone);
@@ -86,8 +86,8 @@ const registerUser = async (req, res) => {
               displayName: typeof name === "string" && name.trim() ? name.trim() : null,
               referralCode: await generateReferralCode(),
               referredById: referrerProfile?.userId || null,
-              smsNotificationsEnabled: true,
-              smsConsentAt: new Date(),
+              smsNotificationsEnabled: smsNotificationsEnabled === true,
+              ...(smsNotificationsEnabled === true ? { smsConsentAt: new Date() } : {}),
             },
           });
           if (referrerProfile) await tx.referral.create({ data: { referrerId: referrerProfile.userId, referredId: data.user.id } });

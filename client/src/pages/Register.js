@@ -30,11 +30,6 @@ const Register = () => {
       return false;
     }
 
-    if (!smsNotificationsEnabled) {
-      setError("You must opt in to text message notifications to create an account.");
-      return false;
-    }
-
     // Validate phone number
     if (!phone) {
       setError("Phone number is required.");
@@ -234,6 +229,7 @@ const Register = () => {
                 type="checkbox"
                 checked={agreedToTerms}
                 onChange={(e) => setAgreedToTerms(e.target.checked)}
+                required
                 className="h-4 w-4 rounded border-slate-600 bg-slate-900 text-wurkzi-600 focus:ring-wurkzi-500 focus:ring-offset-slate-900"
               />
             </div>
@@ -256,17 +252,16 @@ const Register = () => {
               type="checkbox"
               checked={smsNotificationsEnabled}
               onChange={(e) => setSmsNotificationsEnabled(e.target.checked)}
-              required
               className="mt-1 h-4 w-4 rounded border-slate-600 bg-slate-900 text-wurkzi-600 focus:ring-wurkzi-500 focus:ring-offset-slate-900"
             />
             <label htmlFor="sms-opt-in" className="ml-3 text-sm text-slate-400">
-              Required: I agree to receive important job updates and new message notifications by text. Message frequency varies; message and data rates may apply. Reply STOP to opt out.
+              <span className="font-semibold text-slate-300">Optional, but highly recommended:</span> Get important job updates and new message notifications by text. You can sign up without checking this box. Message frequency varies; message and data rates may apply. Reply STOP to opt out.
             </label>
           </div>
 
           <button
             type="submit"
-            disabled={!agreedToTerms || !smsNotificationsEnabled || sendingPhoneCode || creatingAccount}
+            disabled={!agreedToTerms || sendingPhoneCode || creatingAccount}
             className="w-full py-3.5 mt-2 bg-gradient-to-r from-wurkzi-600 to-purple-600 hover:from-wurkzi-500 hover:to-purple-500 text-white font-bold rounded-xl shadow-lg shadow-purple-900/20 transition-all duration-300 hover:-translate-y-0.5 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0"
           >
             {sendingPhoneCode ? "Sending code…" : creatingAccount ? "Creating account…" : phoneVerificationSkipped ? "Create account" : phoneCodeSent ? "Verify phone & create account" : "Text me a verification code"}

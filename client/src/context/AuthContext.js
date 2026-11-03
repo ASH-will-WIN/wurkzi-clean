@@ -57,7 +57,7 @@ export const AuthProvider = ({ children }) => {
       phone,
       phoneVerificationCode,
       referralCode,
-      ...(smsNotificationsEnabled ? { smsNotificationsEnabled: true } : {}),
+      smsNotificationsEnabled: Boolean(smsNotificationsEnabled),
     });
     const { user, session } = result;
     if (!session?.access_token) return { requiresEmailVerification: true, email: user?.email || email };
