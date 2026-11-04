@@ -75,20 +75,39 @@ async function assertNotBlocked(userId, otherUserId) {
 }
 
 function isApplicationChatEligible(application) {
-  return Boolean(application && (
-    application.status === "ACCEPTED"
-    || (application.status === "APPLIED" && ["AUTHORIZED", "CAPTURED"].includes(application.depositStatus))
-  ));
+  return application?.status === "ACCEPTED";
 }
 
 /**
  * All job-conversation access flows through this check. The only valid pair is
- * the job's hirer and the worker who applied to that exact job.
- * REJECTED/WITHDRAWN applications may read an existing conversation, but may
- * not create one or send further messages.
+ * the job's hirer and the worker who applied to that exact job. The poster
+ * must accept the application before either participant can access its chat.
  */
 async function assertJobAuthorization(jobId, participantOneId, participantTwoId, action = "read") {
-  if (!jobId) return null;
+  if (!jobId) {
+    const [firstHiresSecond, secondHiresFirst] = await Promise.all([
+      prisma.job.findFirst({
+        where: {
+          hirerId: participantOneId,
+          applications: { some: { workerId: participantTwoId, status: { not: "ACCEPTED" } } },
+        },
+        select: { id: true },
+      }),
+      prisma.job.findFirst({
+        where: {
+          hirerId: participantTwoId,
+          applications: { some: { workerId: participantOneId, status: { not: "ACCEPTED" } } },
+        },
+        select: { id: true },
+      }),
+    ]);
+    if (firstHiresSecond || secondHiresFirst) {
+      const error = new Error("Chat is available after the job poster accepts your application.");
+      error.status = 403;
+      throw error;
+    }
+    return null;
+  }
   const job = await prisma.job.findUnique({
     where: { id: jobId },
     include: { applications: { select: { workerId: true, status: true, depositStatus: true } } },
@@ -105,17 +124,13 @@ async function assertJobAuthorization(jobId, participantOneId, participantTwoId,
     ? job.applications.find((item) => item.workerId === workerId)
     : null;
   const activeApplication = isApplicationChatEligible(application);
-  const mayMessage = Boolean(application && (
-    application.status === "ACCEPTED"
-    || (application.status === "APPLIED" && job.status === "PENDING" && ["AUTHORIZED", "CAPTURED"].includes(application.depositStatus))
-  ) && job.status !== "CANCELLED");
-  const historicalApplication = application && ["REJECTED", "WITHDRAWN"].includes(application.status);
+  const mayMessage = Boolean(activeApplication && job.status !== "CANCELLED");
   const allowed = action === "create" || action === "send"
     ? mayMessage
-    : activeApplication || historicalApplication;
+    : activeApplication;
 
   if (!hirerIsParticipant || !application || !allowed) {
-    const error = new Error("Not authorized to message about this job");
+    const error = new Error("Chat is available after the job poster accepts your application.");
     error.status = 403;
     throw error;
   }
@@ -140,15 +155,12 @@ async function getConversationForMember(conversationId, userId, action = "read")
   }
   const otherUserId = getOtherParticipant(conversation, userId);
   await assertNotBlocked(userId, otherUserId);
-  let jobAccess = null;
-  if (conversation.jobId) {
-    jobAccess = await assertJobAuthorization(
-      conversation.jobId,
-      conversation.participantOneId,
-      conversation.participantTwoId,
-      action,
-    );
-  }
+  const jobAccess = await assertJobAuthorization(
+    conversation.jobId,
+    conversation.participantOneId,
+    conversation.participantTwoId,
+    action,
+  );
   return {
     conversation,
     otherUserId,
@@ -158,7 +170,6 @@ async function getConversationForMember(conversationId, userId, action = "read")
 }
 
 async function getConversationAccess(conversation) {
-  if (!conversation.jobId) return { canRead: true, messagingAllowed: true, applicationStatus: null };
   try {
     const access = await assertJobAuthorization(
       conversation.jobId,
@@ -168,8 +179,8 @@ async function getConversationAccess(conversation) {
     );
     return {
       canRead: true,
-      messagingAllowed: access.messagingAllowed,
-      applicationStatus: access.application?.status || null,
+      messagingAllowed: access?.messagingAllowed ?? true,
+      applicationStatus: access?.application?.status || null,
     };
   } catch (error) {
     if (error.status === 403 || error.status === 404) return { canRead: false, messagingAllowed: false, applicationStatus: null };

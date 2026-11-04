@@ -71,7 +71,7 @@ const JobDetail = () => {
         },
       });
     } catch (error) {
-      setChatError("Failed to start chat. Please try again.");
+      setChatError(error.response?.data?.message || "Failed to start chat. Please try again.");
       console.error("Error starting chat:", error);
     } finally {
       setStartingChat(false);
@@ -729,22 +729,22 @@ const JobDetail = () => {
           </div>
         ) : (
           <>
-            {/* Add messaging button for workers who have already applied */}
-            {!isHirer && hasApplied && (
+            {!isHirer && currentUserApplication && (
               <div className="card mb-6">
                 <div className="card-header">
                   <h3 className="text-lg font-semibold text-white">
-                    Contact Job Client
+                    {currentUserApplication.status === "ACCEPTED" ? "Contact Job Client" : "Application status"}
                   </h3>
                 </div>
                 <div className="card-body">
-                  <p className="text-slate-400 mb-4">
-                    Have questions about this job? Message the client directly.
+                  <p className="text-slate-400 mb-4" role="status">
+                    {currentUserApplication.status === "ACCEPTED"
+                      ? "Your application was accepted. You can now message the client about this job."
+                      : currentUserApplication.status === "APPLIED"
+                        ? "Your application was submitted. You can chat with the client after they accept it."
+                        : "Your application was not accepted, so chat is unavailable for this job."}
                   </p>
-                  {/* Chat Button for workers who have applied */}
-                  {user &&
-                    user.id !== job?.hirerId &&
-                    job?.status === "PENDING" && (
+                  {currentUserApplication.status === "ACCEPTED" && job?.status !== "CANCELLED" && (
                       <div className="mt-4 flex justify-end">
                         <button
                           onClick={handleStartChat}

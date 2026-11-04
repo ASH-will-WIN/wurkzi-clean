@@ -899,15 +899,15 @@ const Dashboard = () => {
                             </div>
                           </div>
 
-                          {/* Contact Client Section */}
-                          <div className="mt-4 p-4 bg-blue-500/10 border border-blue-500/30 rounded-lg">
+                          {application.status === "ACCEPTED" && (
+                            <div className="mt-4 p-4 bg-blue-500/10 border border-blue-500/30 rounded-lg">
                             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                               <div>
                                 <h4 className="font-medium text-blue-300 mb-1">
-                                  Need to contact the client?
+                                  Chat with the client
                                 </h4>
                                 <p className="text-sm text-blue-300">
-                                  Send a message about this job
+                                  Your application was accepted. You can message the client about this job.
                                 </p>
                               </div>
                               <button
@@ -936,6 +936,12 @@ const Dashboard = () => {
                               </button>
                             </div>
                           </div>
+                          )}
+                          {application.status === "APPLIED" && (
+                            <p className="mt-4 rounded-lg border border-slate-700 bg-slate-800/70 p-4 text-sm text-slate-300" role="status">
+                              Your application was submitted. Chat will be available if the client accepts it.
+                            </p>
+                          )}
                         </div>
                       </div>
                     ))}
