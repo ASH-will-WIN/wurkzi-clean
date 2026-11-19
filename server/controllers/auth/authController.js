@@ -133,7 +133,12 @@ const sendPhoneVerification = async (req, res) => {
     if ([20429, 60203, 60207].includes(Number(error.code))) {
       return res.status(429).json({ error: "Too many code requests. Please wait a few minutes before trying again." });
     }
-    console.error("Phone verification send failed:", error.code || error.message);
+    console.error("Phone verification send failed:", {
+      code: error.code || null,
+      status: error.status || null,
+      message: error.message || "Unknown Twilio error",
+      moreInfo: error.moreInfo || null,
+    });
     return res.status(502).json({ error: "Could not send a verification code right now. Please try again." });
   }
 };
