@@ -164,6 +164,9 @@ const CreateJob = () => {
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-6">
+          <div className="rounded-lg border border-wurkzi-500/30 bg-wurkzi-500/10 p-4 text-sm text-slate-200">
+            Each job is for one worker. If you need more than one worker, create a separate job for each person.
+          </div>
           <div>
             <label
               htmlFor="title"
